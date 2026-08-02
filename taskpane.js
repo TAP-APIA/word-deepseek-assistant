@@ -7,6 +7,13 @@
   // 直连 DeepSeek 官方 API（已实测支持浏览器 CORS 跨域，无需本地服务）
   const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
   const MODELS_API = 'https://api.deepseek.com/models';
+  const SYSTEM_PROMPT =
+    '你是运行在 Microsoft Word 侧边栏中的写作助手。用户消息末尾可能附带【当前选中内容】和【文档内容】作为上下文。\n' +
+    '当你的回复中包含需要写入 Word 文档的正文时，请严格遵守以下规则：\n' +
+    '1. 只把要插入文档的正文放在 Markdown 代码块（以```开头、以```结尾）中；\n' +
+    '2. 代码块外只写修改说明、建议或摘要，不要包含正文；\n' +
+    '3. 代码块内只放正文本身，不要使用任何 Markdown 标记；\n' +
+    '4. 如果回复只是回答问题、不需要插入文档，则不要使用代码块。';
   const MAX_HISTORY = 20; // 发送给模型的对话轮数上限
   const HISTORY_KEY = 'ds_conversations';
   const MAX_HISTORY_CONV = 20;
@@ -28,6 +35,7 @@
     userInput: $('userInput'),
     sendBtn: $('sendBtn'),
     actionBar: $('actionBar'),
+    actionNote: $('actionNote'),
     newChatBtn: $('newChatBtn'),
     settingsBtn: $('settingsBtn'),
     historyBtn: $('historyBtn'),
@@ -262,7 +270,10 @@
         addMessage('assistant', m.content);
       }
     }
-    if (lastAssistantText) showActions();
+    if (lastAssistantText) {
+      showActions();
+      updateActionNote();
+    }
     renderWelcome();
     closeHistory();
     updateSelectionInfo();
@@ -368,6 +379,32 @@
     return t.replace(/\r\n/g, '\r').replace(/\n/g, '\r');
   }
 
+  function extractInsertText(text) {
+    const blocks = [];
+    const re = /```([\s\S]*?)```/g;
+    let m = null;
+    while ((m = re.exec(text)) !== null) {
+      let content = m[1];
+      const lines = content.split('\n');
+      if (lines.length > 1 && /^[A-Za-z0-9_+-]+\s*$/.test(lines[0].trim())) {
+        lines.shift();
+        content = lines.join('\n');
+      }
+      blocks.push(content.trim());
+    }
+    return blocks.length ? blocks.join('\n\n') : null;
+  }
+
+  function hasCodeBlock(text) {
+    return /```/.test(text);
+  }
+
+  function updateActionNote() {
+    els.actionNote.textContent = hasCodeBlock(lastAssistantText)
+      ? '检测到代码块：点击下方按钮将只插入代码块内的正文（修改说明不会写入）'
+      : '将插入整条回复';
+  }
+
   async function applyAction(kind) {
     const text = lastAssistantText;
     if (!text) return;
@@ -375,22 +412,24 @@
       toast('当前不在 Word 中运行，无法写入文档', true);
       return;
     }
+    const extracted = extractInsertText(text);
+    const finalText = extracted !== null ? extracted : text;
     try {
       await Word.run(async (context) => {
         const selRange = context.document.getSelection().getRange();
         if (kind === 'replace') {
-          selRange.insertText(normalizeText(text), Word.InsertLocation.replace);
+          selRange.insertText(normalizeText(finalText), Word.InsertLocation.replace);
         } else if (kind === 'after') {
-          selRange.insertText(normalizeText(text), Word.InsertLocation.after);
+          selRange.insertText(normalizeText(finalText), Word.InsertLocation.after);
         } else if (kind === 'start') {
-          context.document.body.insertText(normalizeText(text), Word.InsertLocation.start);
+          context.document.body.insertText(normalizeText(finalText), Word.InsertLocation.start);
         } else if (kind === 'end') {
-          context.document.body.insertText(normalizeText(text), Word.InsertLocation.end);
+          context.document.body.insertText(normalizeText(finalText), Word.InsertLocation.end);
         }
         await context.sync();
       });
       const labels = { replace: '已替换选中内容', after: '已插入到光标处', start: '已插入到文首', end: '已插入到文末' };
-      toast(labels[kind] || '已应用到文档');
+      toast((labels[kind] || '已应用到文档') + (extracted !== null ? '（仅代码块正文）' : ''));
     } catch (err) {
       toast('应用失败：' + err.message, true);
     }
@@ -410,7 +449,7 @@
         },
         body: JSON.stringify({
           model,
-          messages: conversation,
+          messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...conversation],
           stream: true,
           max_tokens: 4096,
         }),
@@ -523,6 +562,7 @@
       }
       saveCurrentConversation();
       showActions();
+      updateActionNote();
     } catch (err) {
       bubble.classList.add('error');
       bubble.innerHTML = '请求失败：' + escapeHtml(err.message || String(err));

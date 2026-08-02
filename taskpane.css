@@ -258,6 +258,8 @@ body {
 
 .action-title { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
 
+.action-note { font-size: 11px; color: #b45309; margin-bottom: 6px; }
+
 .action-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .action-btn {
