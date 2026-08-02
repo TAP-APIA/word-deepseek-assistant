@@ -38,7 +38,6 @@
     messages: $('messages'),
     userInput: $('userInput'),
     sendBtn: $('sendBtn'),
-    actionBar: $('actionBar'),
     newChatBtn: $('newChatBtn'),
     settingsBtn: $('settingsBtn'),
     historyBtn: $('historyBtn'),
@@ -142,10 +141,6 @@
     els.messages.appendChild(div);
     scrollToBottom();
     return div;
-  }
-
-  function showActions() {
-    els.actionBar.classList.remove('hidden');
   }
 
   /* ---------- 历史对话 ---------- */
@@ -277,7 +272,6 @@
     conversation = conv.messages.slice();
     lastAssistantText = '';
     els.messages.innerHTML = '';
-    els.actionBar.classList.add('hidden');
 
     for (const m of conversation) {
       if (m.role === 'user') {
@@ -287,9 +281,6 @@
         lastReasoningText = m.reasoning || '';
         addMessage('assistant', m.content, false, lastReasoningText);
       }
-    }
-    if (lastAssistantText) {
-      showActions();
     }
     renderWelcome();
     closeHistory();
@@ -412,33 +403,26 @@
     return blocks.length ? blocks.join('\n\n') : null;
   }
 
-  async function applyAction(kind) {
+  async function autoApplyReply() {
     const text = lastAssistantText;
-    if (!text) return;
-    if (!inOffice()) {
-      toast('当前不在 Word 中运行，无法写入文档', true);
-      return;
-    }
+    if (!text || !inOffice()) return;
     const extracted = extractInsertText(text);
-    const finalText = extracted !== null ? extracted : text;
+    if (extracted === null) return; // 无代码块正文，视为纯回答，不写入文档
     try {
       await Word.run(async (context) => {
         const selRange = context.document.getSelection().getRange();
-        if (kind === 'replace') {
-          selRange.insertText(normalizeText(finalText), Word.InsertLocation.replace);
-        } else if (kind === 'after') {
-          selRange.insertText(normalizeText(finalText), Word.InsertLocation.after);
-        } else if (kind === 'start') {
-          context.document.body.insertText(normalizeText(finalText), Word.InsertLocation.start);
-        } else if (kind === 'end') {
-          context.document.body.insertText(normalizeText(finalText), Word.InsertLocation.end);
+        context.load(selRange, 'text');
+        await context.sync();
+        if ((selRange.text || '').trim().length > 0) {
+          selRange.insertText(normalizeText(extracted), Word.InsertLocation.replace);
+        } else {
+          selRange.insertText(normalizeText(extracted), Word.InsertLocation.after);
         }
         await context.sync();
       });
-      const labels = { replace: '已替换选中内容', after: '已插入到光标处', start: '已插入到文首', end: '已插入到文末' };
-      toast((labels[kind] || '已应用到文档') + (extracted !== null ? '（仅代码块正文）' : ''));
+      // 自动写入成功，不弹提示框；用户可按 Ctrl+Z 撤销
     } catch (err) {
-      toast('应用失败：' + err.message, true);
+      toast('自动应用失败：' + err.message, true);
     }
   }
 
@@ -576,7 +560,7 @@
         conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
       }
       saveCurrentConversation();
-      showActions();
+      await autoApplyReply();
     } catch (err) {
       bubble.classList.add('error');
       bubble.innerHTML = '请求失败：' + escapeHtml(err.message || String(err));
@@ -596,7 +580,6 @@
     lastReasoningText = '';
     currentConvId = null;
     els.messages.innerHTML = '';
-    els.actionBar.classList.add('hidden');
     renderWelcome();
     updateSelectionInfo();
   }
@@ -740,9 +723,6 @@
       if (e.target === els.settingsModal) closeSettings();
     });
     els.refreshCtxBtn.addEventListener('click', updateSelectionInfo);
-    els.actionBar.querySelectorAll('.action-btn').forEach((btn) => {
-      btn.addEventListener('click', () => applyAction(btn.dataset.action));
-    });
   }
 
   function refreshStatus() {
