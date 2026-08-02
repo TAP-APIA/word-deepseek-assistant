@@ -23,5 +23,7 @@
 ## 获取源码
 
 ```bash
-curl -L -O https://github.com/TAP-APIA/word-deepseek-assistant/archive/refs/heads/main.zip
+curl -L -O --ssl-no-revoke https://github.com/TAP-APIA/word-deepseek-assistant/archive/refs/heads/main.zip
 ```
+
+（Windows 下如提示“证书吊销检查失败”，`--ssl-no-revoke` 可跳过该检查。）
