@@ -27,6 +27,7 @@
   let streaming = false;
   let lastAssistantText = '';
   let lastReasoningText = '';
+  let pendingEdit = null; // { insertedText, replacedText, applied }
   let currentConvId = null;
   let conversations = loadHistory();
   let cachedModels = null;
@@ -38,6 +39,7 @@
     messages: $('messages'),
     userInput: $('userInput'),
     sendBtn: $('sendBtn'),
+    toggleBtn: $('toggleBtn'),
     newChatBtn: $('newChatBtn'),
     settingsBtn: $('settingsBtn'),
     historyBtn: $('historyBtn'),
@@ -403,27 +405,97 @@
     return blocks.length ? blocks.join('\n\n') : null;
   }
 
+  async function performApply(rec) {
+    await Word.run(async (context) => {
+      const selRange = context.document.getSelection().getRange();
+      context.load(selRange, 'text');
+      await context.sync();
+      const replacedText = (selRange.text || '').trim();
+      if (replacedText.length > 0) {
+        selRange.insertText(rec.insertedText, Word.InsertLocation.replace);
+      } else {
+        selRange.insertText(rec.insertedText, Word.InsertLocation.after);
+      }
+      await context.sync();
+      rec.replacedText = replacedText;
+    });
+  }
+
   async function autoApplyReply() {
     const text = lastAssistantText;
-    if (!text || !inOffice()) return;
-    const extracted = extractInsertText(text);
-    if (extracted === null) return; // 无代码块正文，视为纯回答，不写入文档
+    const extracted = text ? extractInsertText(text) : null;
+    if (extracted === null) {
+      pendingEdit = null; // 纯回答，无可写入正文
+      updateToggleBtn();
+      return;
+    }
+    pendingEdit = { insertedText: normalizeText(extracted), replacedText: '', applied: false };
+    if (!inOffice()) {
+      updateToggleBtn();
+      return;
+    }
     try {
-      await Word.run(async (context) => {
-        const selRange = context.document.getSelection().getRange();
-        context.load(selRange, 'text');
-        await context.sync();
-        if ((selRange.text || '').trim().length > 0) {
-          selRange.insertText(normalizeText(extracted), Word.InsertLocation.replace);
-        } else {
-          selRange.insertText(normalizeText(extracted), Word.InsertLocation.after);
-        }
-        await context.sync();
-      });
-      // 自动写入成功，不弹提示框；用户可按 Ctrl+Z 撤销
+      await performApply(pendingEdit);
+      pendingEdit.applied = true;
     } catch (err) {
       toast('自动应用失败：' + err.message, true);
     }
+    updateToggleBtn();
+  }
+
+  async function onToggleBtn() {
+    if (!pendingEdit) return;
+    if (pendingEdit.applied) {
+      // 撤销：把上次写入的内容还原
+      try {
+        await Word.run(async (context) => {
+          const matches = context.document.body.search(pendingEdit.insertedText);
+          context.load(matches, 'text');
+          await context.sync();
+          if (!matches.items.length) {
+            throw new Error('未找到上次写入的内容（可能已被手动修改）');
+          }
+          const target = matches.items[0];
+          if (pendingEdit.replacedText) {
+            target.insertText(pendingEdit.replacedText, Word.InsertLocation.replace);
+          } else {
+            target.delete();
+          }
+          await context.sync();
+        });
+        pendingEdit.applied = false;
+        toast('已撤销，可点击“接受”重新应用');
+      } catch (err) {
+        toast('撤销失败：' + err.message, true);
+      }
+    } else {
+      // 接受：把回复写入文档
+      if (!inOffice()) {
+        toast('当前不在 Word 中运行，无法应用', true);
+        return;
+      }
+      try {
+        await performApply(pendingEdit);
+        pendingEdit.applied = true;
+        toast('已应用到文档');
+      } catch (err) {
+        toast('应用失败：' + err.message, true);
+      }
+    }
+    updateToggleBtn();
+  }
+
+  function updateToggleBtn() {
+    if (!els.toggleBtn) return;
+    if (!pendingEdit) {
+      els.toggleBtn.disabled = true;
+      els.toggleBtn.textContent = '接受';
+      els.toggleBtn.title = '';
+      return;
+    }
+    els.toggleBtn.disabled = false;
+    els.toggleBtn.textContent = pendingEdit.applied ? '撤销' : '接受';
+    els.toggleBtn.title = pendingEdit.applied ? '撤销上次自动写入' : '将回复应用到文档';
   }
 
   /* ---------- 对话逻辑 ---------- */
@@ -723,6 +795,7 @@
       if (e.target === els.settingsModal) closeSettings();
     });
     els.refreshCtxBtn.addEventListener('click', updateSelectionInfo);
+    els.toggleBtn.addEventListener('click', onToggleBtn);
   }
 
   function refreshStatus() {
@@ -733,6 +806,7 @@
     bind();
     renderWelcome();
     refreshStatus();
+    updateToggleBtn();
     if (!apiKey) openSettings();
   });
 
