@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeepSeek 文档助手</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="taskpane.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">DS</span>
+        <div class="titles">
+          <h1>DeepSeek 文档助手</h1>
+          <span id="hostBadge" class="badge">正在连接 Word…</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="newChatBtn" class="icon-btn" title="新对话">✚</button>
+        <button id="settingsBtn" class="icon-btn" title="设置">⚙</button>
+      </div>
+    </header>
+
+    <section class="context-bar">
+      <label class="check"><input type="checkbox" id="includeSelection" checked /> 附带选中内容</label>
+      <label class="check"><input type="checkbox" id="includeDocStart" /> 附带文档开头</label>
+      <button id="refreshCtxBtn" class="mini-btn" title="刷新选中内容信息">刷新</button>
+      <span id="ctxInfo" class="ctx-info"></span>
+    </section>
+
+    <main id="messages" class="messages"></main>
+
+    <section id="actionBar" class="action-bar hidden">
+      <div class="action-title">将上一条回复应用到文档</div>
+      <div class="action-row">
+        <button class="action-btn primary" data-action="replace">替换选中内容</button>
+        <button class="action-btn" data-action="after">插入光标处</button>
+        <button class="action-btn" data-action="start">插入文首</button>
+        <button class="action-btn" data-action="end">插入文末</button>
+      </div>
+    </section>
+
+    <footer class="composer">
+      <textarea id="userInput" rows="2" placeholder="输入指令，例如：帮我润色选中的段落，改成更正式的语气…"></textarea>
+      <button id="sendBtn" class="send-btn">发送</button>
+      <div id="statusLine" class="status-line"></div>
+    </footer>
+  </div>
+
+  <!-- 设置弹窗 -->
+  <div id="settingsModal" class="modal-mask hidden">
+    <div class="modal">
+      <h2>设置</h2>
+      <label class="field">
+        <span>DeepSeek API Key</span>
+        <input type="password" id="apiKeyInput" placeholder="sk-…" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>模型</span>
+        <select id="modelSelect">
+          <option value="deepseek-chat">deepseek-chat（通用对话）</option>
+          <option value="deepseek-reasoner">deepseek-reasoner（深度思考）</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>自定义模型（可选）</span>
+        <input type="text" id="customModelInput" placeholder="留空使用上方模型" />
+      </label>
+      <p class="modal-note">
+        API Key 仅保存在本机浏览器的本地存储中，请求直接发送给 DeepSeek 官方 API（已实测支持浏览器跨域直连）。
+        本版本无需本地服务，任务窗格页面由静态托管提供。
+      </p>
+      <div class="modal-actions">
+        <button id="cancelSettingsBtn" class="action-btn">取消</button>
+        <button id="saveSettingsBtn" class="action-btn primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="taskpane.js"></script>
+</body>
+</html>
