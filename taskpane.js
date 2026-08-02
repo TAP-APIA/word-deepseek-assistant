@@ -27,8 +27,8 @@
   let streaming = false;
   let lastAssistantText = '';
   let lastReasoningText = '';
-  let pendingEdit = null; // 最新回复未应用记录 { insertedText, replacedText, applied, bubbleEl }
-  let editLog = []; // 已应用的修改记录（按应用顺序）
+  let latestEdit = null; // 最新回复的修改记录 { insertedText, replacedText, applied, bubbleEl, isLatest }
+  let editLog = []; // 更早回复的已应用修改记录（按应用顺序）
   let pendingRollback = null; // 待回退的记录（确认弹窗）
   let currentConvId = null;
   let conversations = loadHistory();
@@ -279,7 +279,7 @@
     conversation = conv.messages.slice();
     lastAssistantText = '';
     els.messages.innerHTML = '';
-    pendingEdit = null;
+    latestEdit = null;
     editLog = [];
     pendingRollback = null;
 
@@ -446,12 +446,24 @@
     const btn = record.btnEl;
     if (!btn) return;
     btn.disabled = false;
-    btn.textContent = record.applied ? '回退' : '接受';
-    btn.title = record.applied ? '回退到此次修改之前' : '将回复应用到文档';
+    if (record.isLatest) {
+      // 最新一条回复：沿用原逻辑，撤销/接受切换
+      btn.textContent = record.applied ? '撤销' : '接受';
+      btn.title = record.applied ? '撤销上次自动写入' : '将回复应用到文档';
+    } else {
+      btn.textContent = record.applied ? '回退' : '接受';
+      btn.title = record.applied ? '回退到此次修改之前' : '将回复应用到文档';
+    }
   }
 
   function onRecordBtn(record) {
-    if (record.applied) {
+    if (record.isLatest) {
+      if (record.applied) {
+        undoLatest();
+      } else {
+        applyRecord(record);
+      }
+    } else if (record.applied) {
       showConfirmRollback(record);
     } else {
       applyRecord(record);
@@ -466,7 +478,7 @@
     try {
       await performApply(record);
       record.applied = true;
-      editLog.push(record);
+      if (!record.isLatest) editLog.push(record);
       updateButtonFor(record);
       toast('已应用到文档');
     } catch (err) {
@@ -478,21 +490,65 @@
     const text = lastAssistantText;
     const extracted = text ? extractInsertText(text) : null;
     if (extracted === null) {
-      pendingEdit = null; // 纯回答，无可写入正文
       return;
     }
-    const record = { insertedText: normalizeText(extracted), replacedText: '', applied: false, bubbleEl: bubble };
-    pendingEdit = record;
+    // 上一条编辑降级为“之前的回复”：已应用的进入回退列表，未应用的移除按钮
+    if (latestEdit) {
+      if (latestEdit.applied) {
+        latestEdit.isLatest = false;
+        editLog.push(latestEdit);
+      } else {
+        const wrap = latestEdit.bubbleEl ? latestEdit.bubbleEl.querySelector('.reply-actions') : null;
+        if (wrap) wrap.remove();
+      }
+    }
+    const record = {
+      insertedText: normalizeText(extracted),
+      replacedText: '',
+      applied: false,
+      bubbleEl: bubble,
+      isLatest: true,
+    };
+    latestEdit = record;
     appendToggleButton(bubble, record);
     if (!inOffice()) return;
     try {
       await performApply(record);
       record.applied = true;
-      editLog.push(record);
-      pendingEdit = null;
       updateButtonFor(record);
     } catch (err) {
       toast('自动应用失败：' + err.message, true);
+    }
+  }
+
+  async function undoLatest() {
+    const rec = latestEdit;
+    if (!rec || !rec.applied) return;
+    if (!inOffice()) {
+      toast('当前不在 Word 中运行，无法撤销', true);
+      return;
+    }
+    try {
+      await Word.run(async (context) => {
+        const matches = context.document.body.search(rec.insertedText);
+        context.load(matches, 'text');
+        await context.sync();
+        if (!matches.items.length) {
+          throw new Error('未找到上次写入的内容（可能已被手动修改）');
+        }
+        const target = matches.items[0];
+        if (rec.replacedText) {
+          target.insertText(rec.replacedText, Word.InsertLocation.replace);
+        } else {
+          target.delete();
+        }
+        await context.sync();
+      });
+      rec.applied = false;
+      updateButtonFor(rec);
+      toast('已撤销，可点击“接受”重新应用');
+    } catch (err) {
+      toast('撤销失败：' + err.message, true);
     }
   }
 
@@ -500,6 +556,7 @@
     const idx = editLog.indexOf(record);
     if (idx < 0) return;
     const targets = editLog.slice(idx);
+    if (latestEdit && latestEdit.applied) targets.push(latestEdit);
     try {
       await Word.run(async (context) => {
         for (let i = targets.length - 1; i >= 0; i--) {
@@ -532,7 +589,8 @@
 
   function showConfirmRollback(record) {
     pendingRollback = record;
-    const later = editLog.indexOf(record) >= 0 ? editLog.length - editLog.indexOf(record) - 1 : 0;
+    const idx = editLog.indexOf(record);
+    const later = (idx >= 0 ? editLog.length - idx - 1 : 0) + (latestEdit && latestEdit.applied ? 1 : 0);
     els.confirmMsg.textContent = later > 0
       ? '将撤销该回复写入的内容，以及其后的 ' + later + ' 条修改。确定回退到此次修改之前吗？'
       : '将撤销该回复写入的内容。确定回退到此次修改之前吗？';
@@ -698,7 +756,7 @@
     lastReasoningText = '';
     currentConvId = null;
     els.messages.innerHTML = '';
-    pendingEdit = null;
+    latestEdit = null;
     editLog = [];
     pendingRollback = null;
     renderWelcome();
