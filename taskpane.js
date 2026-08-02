@@ -686,7 +686,7 @@
   function bind() {
     els.sendBtn.addEventListener('click', handleSend);
     els.userInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         handleSend();
       }
