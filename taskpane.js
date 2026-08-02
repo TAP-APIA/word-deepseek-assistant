@@ -31,6 +31,7 @@
   let latestEdit = null; // 最新回复的修改记录 { insertedText, replacedText, applied, bubbleEl, isLatest }
   let editLog = []; // 更早回复的已应用修改记录（按应用顺序）
   let pendingRollback = null; // 待回退的记录（确认弹窗）
+  const MAX_EDITS = 20; // 内存中保留的存档点数上限
   let currentConvId = null;
   let conversations = loadHistory();
   let cachedModels = null;
@@ -431,6 +432,21 @@
     });
   }
 
+  async function getBodyOoxml() {
+    return Word.run(async (context) => {
+      const result = context.document.body.getOoxml();
+      await context.sync();
+      return result.value;
+    });
+  }
+
+  async function restoreBodyOoxml(ooxml) {
+    await Word.run(async (context) => {
+      context.document.body.insertOoxml(ooxml, Word.InsertLocation.replace);
+      await context.sync();
+    });
+  }
+
   function appendToggleButton(bubble, record) {
     const wrap = document.createElement('div');
     wrap.className = 'reply-actions';
@@ -478,9 +494,11 @@
       return;
     }
     try {
+      record.beforeOoxml = await getBodyOoxml();
       await performApply(record);
       record.applied = true;
       if (!record.isLatest) editLog.push(record);
+      if (editLog.length > MAX_EDITS) editLog.shift();
       updateButtonFor(record);
       toast('已应用到文档');
     } catch (err) {
@@ -499,6 +517,7 @@
       if (latestEdit.applied) {
         latestEdit.isLatest = false;
         editLog.push(latestEdit);
+        if (editLog.length > MAX_EDITS) editLog.shift();
       } else {
         const wrap = latestEdit.bubbleEl ? latestEdit.bubbleEl.querySelector('.reply-actions') : null;
         if (wrap) wrap.remove();
@@ -516,6 +535,7 @@
     appendToggleButton(bubble, record);
     if (!inOffice()) return;
     try {
+      record.beforeOoxml = await getBodyOoxml();
       await performApply(record);
       record.applied = true;
       updateButtonFor(record);
@@ -531,22 +551,12 @@
       toast('当前不在 Word 中运行，无法撤销', true);
       return;
     }
+    if (!rec.beforeOoxml) {
+      toast('没有存档点，无法撤销', true);
+      return;
+    }
     try {
-      await Word.run(async (context) => {
-        const matches = context.document.body.search(rec.insertedText);
-        context.load(matches, 'text');
-        await context.sync();
-        if (!matches.items.length) {
-          throw new Error('未找到上次写入的内容（可能已被手动修改）');
-        }
-        const target = matches.items[0];
-        if (rec.replacedText) {
-          target.insertText(rec.replacedText, Word.InsertLocation.replace);
-        } else {
-          target.delete();
-        }
-        await context.sync();
-      });
+      await restoreBodyOoxml(rec.beforeOoxml);
       rec.applied = false;
       updateButtonFor(rec);
       toast('已撤销，可点击“接受”重新应用');
@@ -558,27 +568,12 @@
   async function rollbackTo(record) {
     const idx = editLog.indexOf(record);
     if (idx < 0) return;
-    const targets = editLog.slice(idx);
-    if (latestEdit && latestEdit.applied) targets.push(latestEdit);
+    if (!record.beforeOoxml) {
+      toast('没有该回复的存档点，无法回退', true);
+      return;
+    }
     try {
-      await Word.run(async (context) => {
-        for (let i = targets.length - 1; i >= 0; i--) {
-          const rec = targets[i];
-          const matches = context.document.body.search(rec.insertedText);
-          context.load(matches, 'text');
-          await context.sync();
-          if (!matches.items.length) {
-            throw new Error('未找到该回复写入的内容（可能已被手动修改）');
-          }
-          const target = matches.items[0];
-          if (rec.replacedText) {
-            target.insertText(rec.replacedText, Word.InsertLocation.replace);
-          } else {
-            target.delete();
-          }
-          await context.sync();
-        }
-      });
+      await restoreBodyOoxml(record.beforeOoxml);
       // 删除该回复之后的对话记录与气泡
       const keepIdx = conversation.findIndex(
         (m) => m.role === 'assistant' && record.replyContent && m.content === record.replyContent
@@ -590,10 +585,8 @@
           node.parentNode.removeChild(node.nextSibling);
         }
       }
-      for (const rec of targets) {
-        rec.applied = false;
-        updateButtonFor(rec);
-      }
+      record.applied = false;
+      if (latestEdit && latestEdit !== record) latestEdit.applied = false;
       editLog = editLog.slice(0, idx);
       latestEdit = record;
       record.isLatest = true;
