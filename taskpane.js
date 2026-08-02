@@ -292,46 +292,75 @@
     }
   }
 
+  async function refreshDocInfo() {
+    if (typeof Word === 'undefined') {
+      els.ctxInfo.textContent = 'Word API 未加载';
+      return;
+    }
+    try {
+      await Word.run(async (context) => {
+        const body = context.document.body;
+        context.load(body, 'text');
+        await context.sync();
+        const len = (body.text || '').trim().length;
+        els.ctxInfo.textContent = len > 0 ? `文档共 ${len} 字` : '文档为空';
+      });
+    } catch (err) {
+      els.ctxInfo.textContent = '读取文档失败：' + (err && err.message ? err.message : String(err));
+    }
+  }
+
   /**
    * 按需读取文档上下文，附加到用户消息里。
    */
   async function gatherContext() {
     const wantSelection = els.includeSelection.checked;
     const wantDoc = els.includeDocStart.checked;
-    if (!inOffice() || (!wantSelection && !wantDoc)) {
-      els.ctxInfo.textContent = '';
+    if (!wantSelection && !wantDoc) {
+      els.ctxInfo.textContent = '未勾选“附带选中内容/附带文档内容”';
       return '';
     }
+    if (typeof Word === 'undefined') {
+      els.ctxInfo.textContent = 'Word API 未加载，无法读取文档';
+      return '';
+    }
+    try {
+      return await Word.run(async (context) => {
+        let selRef = null;
+        if (wantSelection) {
+          selRef = context.document.getSelection().getText();
+        }
+        let bodyRef = null;
+        if (wantDoc) {
+          bodyRef = context.document.body;
+          context.load(bodyRef, 'text');
+        }
+        await context.sync();
 
-    return Word.run(async (context) => {
-      let selRef = null;
-      if (wantSelection) {
-        selRef = context.document.getSelection().getText();
-      }
-      let bodyRef = null;
-      if (wantDoc) {
-        bodyRef = context.document.body;
-        context.load(bodyRef, 'text');
-      }
-      await context.sync();
-
-      const parts = [];
-      if (wantSelection) {
-        const selText = (selRef.value || '').trim();
-        els.ctxInfo.textContent = `已选 ${selText.length} 字`;
-        if (selText.length > 0) parts.push(`【当前选中内容】（${selText.length} 字）：\n${selText.slice(0, 2000)}`);
-      }
-      if (wantDoc) {
-        const docText = (bodyRef.text || '').trim();
-        els.ctxInfo.textContent = (els.ctxInfo.textContent ? els.ctxInfo.textContent + '；' : '') + `已读文档 ${docText.length} 字`;
-        if (docText.length > 0) parts.push(`【文档内容】（全文 ${docText.length} 字，附前 8000 字）：\n${docText.slice(0, 8000)}`);
-      }
-      if (parts.length === 0) return '';
-      return (
-        '以下是当前 Word 文档中读取到的上下文（来自“附带选中内容/附带文档内容”选项），请基于这些内容回答，不要编造文档里不存在的细节：\n' +
-        parts.join('\n\n')
-      );
-    });
+        const parts = [];
+        if (wantSelection) {
+          const selText = (selRef.value || '').trim();
+          els.ctxInfo.textContent = `已选 ${selText.length} 字`;
+          if (selText.length > 0) parts.push(`【当前选中内容】（${selText.length} 字）：\n${selText.slice(0, 2000)}`);
+        }
+        if (wantDoc) {
+          const docText = (bodyRef.text || '').trim();
+          els.ctxInfo.textContent = (els.ctxInfo.textContent ? els.ctxInfo.textContent + '；' : '') + `已读文档 ${docText.length} 字`;
+          if (docText.length > 0) parts.push(`【文档内容】（全文 ${docText.length} 字，附前 16000 字）：\n${docText.slice(0, 16000)}`);
+        }
+        if (parts.length === 0) {
+          els.ctxInfo.textContent = (els.ctxInfo.textContent || '') + '；无可附带内容';
+          return '';
+        }
+        return (
+          '以下是当前 Word 文档中读取到的上下文（来自“附带选中内容/附带文档内容”选项），请基于这些内容回答，不要编造文档里不存在的细节：\n' +
+          parts.join('\n\n')
+        );
+      });
+    } catch (err) {
+      els.ctxInfo.textContent = '读取文档失败：' + (err && err.message ? err.message : String(err));
+      return '';
+    }
   }
 
   function normalizeText(t) {
@@ -668,6 +697,7 @@
       }
       els.hostBadge.textContent = `已连接 ${host}`;
       updateSelectionInfo();
+      refreshDocInfo();
     });
   } else {
     els.hostBadge.textContent = 'Office.js 未加载';
