@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DeepSeek 文档助手 - Word 桌面版加载项清单（无本地服务版）
+
+  页面已部署在 GitHub Pages：https://tap-apia.github.io/word-deepseek-assistant/
+  如以后更换托管地址，请同步修改本文件中的 URL。
+-->
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+           xsi:type="TaskPaneApp">
+  <Id>3f8b2a1c-6d4e-4f9a-9b2c-5d7e8a1f3b6c</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>DeepSeek Word Assistant</ProviderName>
+  <DefaultLocale>zh-CN</DefaultLocale>
+  <DisplayName DefaultValue="DeepSeek 文档助手"/>
+  <Description DefaultValue="在 Word 侧边栏与 DeepSeek 对话，并将回复应用到当前文档。"/>
+  <IconUrl DefaultValue="https://tap-apia.github.io/word-deepseek-assistant/assets/icon-32.png"/>
+  <SupportUrl DefaultValue="https://tap-apia.github.io/word-deepseek-assistant/"/>
+  <AppDomains>
+    <AppDomain>https://tap-apia.github.io</AppDomain>
+    <AppDomain>https://api.deepseek.com</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Document"/>
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://tap-apia.github.io/word-deepseek-assistant/taskpane.html"/>
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+                    xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Document">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="DeepSeekGroup">
+                <Label resid="DeepSeek.GroupLabel"/>
+                <Control xsi:type="Button" id="DeepSeekOpenTaskpaneButton">
+                  <Label resid="DeepSeek.TaskpaneButtonLabel"/>
+                  <Supertip>
+                    <Title resid="DeepSeek.TaskpaneButtonLabel"/>
+                    <Description resid="DeepSeek.TaskpaneButtonTooltip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="DeepSeek.Icon16"/>
+                    <bt:Image size="32" resid="DeepSeek.Icon32"/>
+                    <bt:Image size="80" resid="DeepSeek.Icon80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>DeepSeekTaskpane</TaskpaneId>
+                    <SourceLocation resid="DeepSeek.TaskpaneUrl"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="DeepSeek.Icon16" DefaultValue="https://tap-apia.github.io/word-deepseek-assistant/assets/icon-16.png"/>
+        <bt:Image id="DeepSeek.Icon32" DefaultValue="https://tap-apia.github.io/word-deepseek-assistant/assets/icon-32.png"/>
+        <bt:Image id="DeepSeek.Icon80" DefaultValue="https://tap-apia.github.io/word-deepseek-assistant/assets/icon-80.png"/>
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="DeepSeek.TaskpaneUrl" DefaultValue="https://tap-apia.github.io/word-deepseek-assistant/taskpane.html"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="DeepSeek.GroupLabel" DefaultValue="DeepSeek"/>
+        <bt:String id="DeepSeek.TaskpaneButtonLabel" DefaultValue="DeepSeek 助手"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="DeepSeek.TaskpaneButtonTooltip" DefaultValue="打开 DeepSeek 对话侧边栏，辅助编辑当前文档"/>
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>
