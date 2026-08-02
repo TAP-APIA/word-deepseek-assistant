@@ -28,6 +28,7 @@
   let lastAssistantText = '';
   let lastReasoningText = '';
   let pendingEdit = null; // { insertedText, replacedText, applied }
+  let toggleBtnEl = null;
   let currentConvId = null;
   let conversations = loadHistory();
   let cachedModels = null;
@@ -39,7 +40,6 @@
     messages: $('messages'),
     userInput: $('userInput'),
     sendBtn: $('sendBtn'),
-    toggleBtn: $('toggleBtn'),
     newChatBtn: $('newChatBtn'),
     settingsBtn: $('settingsBtn'),
     historyBtn: $('historyBtn'),
@@ -274,6 +274,7 @@
     conversation = conv.messages.slice();
     lastAssistantText = '';
     els.messages.innerHTML = '';
+    toggleBtnEl = null;
 
     for (const m of conversation) {
       if (m.role === 'user') {
@@ -486,16 +487,29 @@
   }
 
   function updateToggleBtn() {
-    if (!els.toggleBtn) return;
+    if (!toggleBtnEl) return;
     if (!pendingEdit) {
-      els.toggleBtn.disabled = true;
-      els.toggleBtn.textContent = '接受';
-      els.toggleBtn.title = '';
+      toggleBtnEl.disabled = true;
+      toggleBtnEl.textContent = '接受';
+      toggleBtnEl.title = '';
       return;
     }
-    els.toggleBtn.disabled = false;
-    els.toggleBtn.textContent = pendingEdit.applied ? '撤销' : '接受';
-    els.toggleBtn.title = pendingEdit.applied ? '撤销上次自动写入' : '将回复应用到文档';
+    toggleBtnEl.disabled = false;
+    toggleBtnEl.textContent = pendingEdit.applied ? '撤销' : '接受';
+    toggleBtnEl.title = pendingEdit.applied ? '撤销上次自动写入' : '将回复应用到文档';
+  }
+
+  function appendToggleButton(bubble) {
+    const wrap = document.createElement('div');
+    wrap.className = 'reply-actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toggle-btn';
+    btn.addEventListener('click', onToggleBtn);
+    wrap.appendChild(btn);
+    bubble.appendChild(wrap);
+    toggleBtnEl = btn;
+    updateToggleBtn();
   }
 
   /* ---------- 对话逻辑 ---------- */
@@ -633,6 +647,12 @@
       }
       saveCurrentConversation();
       await autoApplyReply();
+      els.messages.querySelectorAll('.reply-actions').forEach((el) => el.remove());
+      if (pendingEdit) {
+        appendToggleButton(bubble);
+      } else {
+        toggleBtnEl = null;
+      }
     } catch (err) {
       bubble.classList.add('error');
       bubble.innerHTML = '请求失败：' + escapeHtml(err.message || String(err));
@@ -652,6 +672,7 @@
     lastReasoningText = '';
     currentConvId = null;
     els.messages.innerHTML = '';
+    toggleBtnEl = null;
     renderWelcome();
     updateSelectionInfo();
   }
@@ -795,7 +816,6 @@
       if (e.target === els.settingsModal) closeSettings();
     });
     els.refreshCtxBtn.addEventListener('click', updateSelectionInfo);
-    els.toggleBtn.addEventListener('click', onToggleBtn);
   }
 
   function refreshStatus() {

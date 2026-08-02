@@ -74,6 +74,12 @@ body {
 .toggle-btn:hover { background: #f3f4f6; }
 .toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.reply-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
 /* 历史对话抽屉 */
 .history-backdrop {
   position: fixed;
