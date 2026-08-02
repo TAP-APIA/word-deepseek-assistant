@@ -494,13 +494,20 @@
       return;
     }
     try {
-      record.beforeOoxml = await getBodyOoxml();
-      await performApply(record);
+      const isReapply = !!record.afterOoxml;
+      if (record.afterOoxml) {
+        // 已有应用后的存档：直接整文恢复到该次修改应用后的状态
+        await restoreBodyOoxml(record.afterOoxml);
+      } else {
+        record.beforeOoxml = await getBodyOoxml();
+        await performApply(record);
+        record.afterOoxml = await getBodyOoxml();
+      }
       record.applied = true;
       if (!record.isLatest) editLog.push(record);
       if (editLog.length > MAX_EDITS) editLog.shift();
       updateButtonFor(record);
-      toast('已应用到文档');
+      toast(isReapply ? '已重新应用到文档' : '已应用到文档');
     } catch (err) {
       toast('应用失败：' + err.message, true);
     }
@@ -537,6 +544,7 @@
     try {
       record.beforeOoxml = await getBodyOoxml();
       await performApply(record);
+      record.afterOoxml = await getBodyOoxml();
       record.applied = true;
       updateButtonFor(record);
     } catch (err) {
