@@ -23,5 +23,5 @@
 ## 获取源码
 
 ```bash
-git clone https://github.com/TAP-APIA/word-deepseek-assistant.git
+curl -L -O https://github.com/TAP-APIA/word-deepseek-assistant/archive/refs/heads/main.zip
 ```
