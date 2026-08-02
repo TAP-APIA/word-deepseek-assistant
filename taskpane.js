@@ -508,6 +508,7 @@
       applied: false,
       bubbleEl: bubble,
       isLatest: true,
+      replyContent: text,
     };
     latestEdit = record;
     appendToggleButton(bubble, record);
@@ -576,12 +577,27 @@
           await context.sync();
         }
       });
+      // 删除该回复之后的对话记录与气泡
+      const keepIdx = conversation.findIndex(
+        (m) => m.role === 'assistant' && record.replyContent && m.content === record.replyContent
+      );
+      if (keepIdx >= 0) {
+        conversation = conversation.slice(0, keepIdx + 1);
+        let node = record.bubbleEl;
+        while (node && node.nextSibling) {
+          node.parentNode.removeChild(node.nextSibling);
+        }
+      }
       for (const rec of targets) {
         rec.applied = false;
         updateButtonFor(rec);
       }
       editLog = editLog.slice(0, idx);
-      toast('已回退到该回复之前');
+      latestEdit = record;
+      record.isLatest = true;
+      updateButtonFor(record);
+      saveCurrentConversation();
+      toast('已回退到该回复之前，并删除其后的对话');
     } catch (err) {
       toast('回退失败：' + err.message, true);
     }
@@ -592,8 +608,8 @@
     const idx = editLog.indexOf(record);
     const later = (idx >= 0 ? editLog.length - idx - 1 : 0) + (latestEdit && latestEdit.applied ? 1 : 0);
     els.confirmMsg.textContent = later > 0
-      ? '将撤销该回复写入的内容，以及其后的 ' + later + ' 条修改。确定回退到此次修改之前吗？'
-      : '将撤销该回复写入的内容。确定回退到此次修改之前吗？';
+      ? '将撤销该回复写入的内容及其后的 ' + later + ' 条修改，并删除该回复之后的对话记录。确定回退吗？'
+      : '将撤销该回复写入的内容，并删除该回复之后的对话记录。确定回退吗？';
     els.confirmModal.classList.remove('hidden');
   }
 
