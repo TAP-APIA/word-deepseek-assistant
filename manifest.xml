@@ -38,6 +38,11 @@
             <OfficeTab id="TabHome">
               <Group id="DeepSeekGroup">
                 <Label resid="DeepSeek.GroupLabel"/>
+                <Icon>
+                  <bt:Image size="16" resid="DeepSeek.Icon16"/>
+                  <bt:Image size="32" resid="DeepSeek.Icon32"/>
+                  <bt:Image size="80" resid="DeepSeek.Icon80"/>
+                </Icon>
                 <Control xsi:type="Button" id="DeepSeekOpenTaskpaneButton">
                   <Label resid="DeepSeek.TaskpaneButtonLabel"/>
                   <Supertip>
