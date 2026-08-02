@@ -23,6 +23,7 @@
 
   let apiKey = localStorage.getItem('ds_api_key') || '';
   let model = localStorage.getItem('ds_model') || '';
+  let reasoningEffort = localStorage.getItem('ds_reasoning_effort') || 'high';
   let conversation = [];
   let streaming = false;
   let lastAssistantText = '';
@@ -57,6 +58,7 @@
     settingsModal: $('settingsModal'),
     apiKeyInput: $('apiKeyInput'),
     modelSelect: $('modelSelect'),
+    effortSelect: $('effortSelect'),
     customModelInput: $('customModelInput'),
     fetchModelsBtn: $('fetchModelsBtn'),
     settingsStatus: $('settingsStatus'),
@@ -635,6 +637,7 @@
           model,
           messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...conversation],
           stream: true,
+          reasoning_effort: reasoningEffort,
           max_tokens: 4096,
         }),
       });
@@ -784,6 +787,7 @@
   function openSettings() {
     els.apiKeyInput.value = apiKey;
     els.customModelInput.value = LEGACY_MODELS.includes(model) ? '' : model;
+    els.effortSelect.value = reasoningEffort;
     els.settingsModal.classList.remove('hidden');
     els.saveSettingsBtn.disabled = true;
     if (apiKey) {
@@ -880,11 +884,13 @@
       toast('警告：' + model + ' 已弃用（2026-07-24），请选择 deepseek-v4-flash 或 deepseek-v4-pro', true);
       return;
     }
+    reasoningEffort = els.effortSelect.value;
     localStorage.setItem('ds_api_key', apiKey);
     localStorage.setItem('ds_model', model);
+    localStorage.setItem('ds_reasoning_effort', reasoningEffort);
     closeSettings();
     refreshStatus();
-    toast('设置已保存：' + model);
+    toast('设置已保存：' + model + '（思考强度 ' + reasoningEffort + '）');
   }
 
   /* ---------- 初始化 ---------- */
@@ -904,6 +910,9 @@
       els.saveSettingsBtn.disabled = !els.customModelInput.value.trim() && !els.modelSelect.value;
     });
     els.modelSelect.addEventListener('change', () => {
+      els.saveSettingsBtn.disabled = false;
+    });
+    els.effortSelect.addEventListener('change', () => {
       els.saveSettingsBtn.disabled = false;
     });
     els.historyBtn.addEventListener('click', openHistory);
