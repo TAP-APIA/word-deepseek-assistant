@@ -11,17 +11,27 @@
   <div id="app">
     <header class="topbar">
       <div class="brand">
-        <span class="logo">DS</span>
+        <img class="logo" src="assets/deepseek-whale.png" alt="DeepSeek" />
         <div class="titles">
           <h1>DeepSeek 文档助手</h1>
           <span id="hostBadge" class="badge">正在连接 Word…</span>
         </div>
       </div>
       <div class="top-actions">
+        <button id="historyBtn" class="icon-btn" title="历史对话">☰</button>
         <button id="newChatBtn" class="icon-btn" title="新对话">✚</button>
         <button id="settingsBtn" class="icon-btn" title="设置">⚙</button>
       </div>
     </header>
+
+    <div id="historyBackdrop" class="history-backdrop hidden"></div>
+    <aside id="historyPanel" class="history-panel">
+      <div class="history-head">
+        <span>历史对话</span>
+        <button id="historyCloseBtn" class="icon-btn" title="关闭">×</button>
+      </div>
+      <ul id="historyList" class="history-list"></ul>
+    </aside>
 
     <section class="context-bar">
       <label class="check"><input type="checkbox" id="includeSelection" checked /> 附带选中内容</label>
@@ -43,8 +53,10 @@
     </section>
 
     <footer class="composer">
-      <textarea id="userInput" rows="2" placeholder="输入指令，例如：帮我润色选中的段落，改成更正式的语气…"></textarea>
-      <button id="sendBtn" class="send-btn">发送</button>
+      <div class="input-wrap">
+        <textarea id="userInput" rows="2" placeholder="输入指令，例如：帮我润色选中的段落，改成更正式的语气…"></textarea>
+        <button id="sendBtn" class="send-btn">发送</button>
+      </div>
       <div id="statusLine" class="status-line"></div>
     </footer>
   </div>

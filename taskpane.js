@@ -7,12 +7,16 @@
   // 直连 DeepSeek 官方 API（已实测支持浏览器 CORS 跨域，无需本地服务）
   const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
   const MAX_HISTORY = 20; // 发送给模型的对话轮数上限
+  const HISTORY_KEY = 'ds_conversations';
+  const MAX_HISTORY_CONV = 20;
 
   let apiKey = localStorage.getItem('ds_api_key') || '';
   let model = localStorage.getItem('ds_model') || 'deepseek-chat';
   let conversation = [];
   let streaming = false;
   let lastAssistantText = '';
+  let currentConvId = null;
+  let conversations = loadHistory();
 
   const $ = (id) => document.getElementById(id);
 
@@ -24,6 +28,11 @@
     actionBar: $('actionBar'),
     newChatBtn: $('newChatBtn'),
     settingsBtn: $('settingsBtn'),
+    historyBtn: $('historyBtn'),
+    historyBackdrop: $('historyBackdrop'),
+    historyPanel: $('historyPanel'),
+    historyList: $('historyList'),
+    historyCloseBtn: $('historyCloseBtn'),
     ctxInfo: $('ctxInfo'),
     includeSelection: $('includeSelection'),
     includeDocStart: $('includeDocStart'),
@@ -89,9 +98,7 @@
     div.className = 'welcome';
     div.innerHTML =
       '在下方输入指令，让 DeepSeek 帮你写作、润色或翻译。<br>' +
-      '勾选“附带选中内容”后，模型就能看到你当前选中的文字。<br>' +
-      '回复生成后，点击底部按钮即可应用到文档。<br>' +
-      '<small>当前为直连模式：无需本地服务，请确保任务窗格页面已托管在静态网站。</small>';
+      '勾选“附带选中内容”后，模型就能看到你当前选中的文字。';
     els.messages.appendChild(div);
   }
 
@@ -110,6 +117,151 @@
 
   function showActions() {
     els.actionBar.classList.remove('hidden');
+  }
+
+  /* ---------- 历史对话 ---------- */
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveHistory() {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(conversations.slice(0, MAX_HISTORY_CONV)));
+    } catch (err) {
+      console.warn('保存历史失败：', err);
+    }
+  }
+
+  function stripContext(content) {
+    const marker = '\n\n以下是当前 Word 文档中读取到的上下文';
+    const i = content.indexOf(marker);
+    return i >= 0 ? content.slice(0, i) : content;
+  }
+
+  function getTitleFromText(text) {
+    const t = stripContext(text).trim().replace(/\s+/g, ' ');
+    return (t.length > 24 ? t.slice(0, 24) + '…' : t) || '（无标题）';
+  }
+
+  function saveCurrentConversation() {
+    if (!conversation.length) return;
+    if (!currentConvId) {
+      currentConvId = 'conv_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+    const firstUser = conversation.find((m) => m.role === 'user');
+    const rec = {
+      id: currentConvId,
+      title: getTitleFromText(firstUser ? firstUser.content : ''),
+      messages: conversation.slice(),
+      updatedAt: Date.now(),
+    };
+    const idx = conversations.findIndex((c) => c.id === currentConvId);
+    if (idx >= 0) {
+      conversations[idx] = rec;
+    } else {
+      conversations.unshift(rec);
+    }
+    if (conversations.length > MAX_HISTORY_CONV) {
+      conversations = conversations.slice(0, MAX_HISTORY_CONV);
+    }
+    saveHistory();
+  }
+
+  function formatTime(ts) {
+    const min = Math.floor((Date.now() - ts) / 60000);
+    if (min < 1) return '刚刚';
+    if (min < 60) return min + ' 分钟前';
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return hr + ' 小时前';
+    const day = Math.floor(hr / 24);
+    if (day < 7) return day + ' 天前';
+    return new Date(ts).toLocaleDateString();
+  }
+
+  function renderHistoryList() {
+    els.historyList.innerHTML = '';
+    const sorted = conversations.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+    if (!sorted.length) {
+      els.historyList.innerHTML = '<div class="history-empty">暂无历史对话</div>';
+      return;
+    }
+    for (const conv of sorted) {
+      const li = document.createElement('li');
+      li.className = 'history-item' + (conv.id === currentConvId ? ' active' : '');
+
+      const title = document.createElement('span');
+      title.className = 'history-title';
+      title.textContent = conv.title;
+
+      const time = document.createElement('span');
+      time.className = 'history-time';
+      time.textContent = formatTime(conv.updatedAt);
+
+      const del = document.createElement('button');
+      del.className = 'history-del';
+      del.textContent = '✕';
+      del.title = '删除';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteConversation(conv.id);
+      });
+
+      li.appendChild(title);
+      li.appendChild(time);
+      li.appendChild(del);
+      li.addEventListener('click', () => loadConversation(conv.id));
+      els.historyList.appendChild(li);
+    }
+  }
+
+  function openHistory() {
+    renderHistoryList();
+    els.historyPanel.classList.add('open');
+    els.historyBackdrop.classList.remove('hidden');
+  }
+
+  function closeHistory() {
+    els.historyPanel.classList.remove('open');
+    els.historyBackdrop.classList.add('hidden');
+  }
+
+  function deleteConversation(id) {
+    conversations = conversations.filter((c) => c.id !== id);
+    if (currentConvId === id) currentConvId = null;
+    saveHistory();
+    renderHistoryList();
+  }
+
+  function loadConversation(id) {
+    saveCurrentConversation();
+    const conv = conversations.find((c) => c.id === id);
+    if (!conv) return;
+
+    currentConvId = id;
+    conversation = conv.messages.slice();
+    lastAssistantText = '';
+    els.messages.innerHTML = '';
+    els.actionBar.classList.add('hidden');
+
+    for (const m of conversation) {
+      if (m.role === 'user') {
+        addMessage('user', stripContext(m.content));
+      } else if (m.role === 'assistant') {
+        lastAssistantText = m.content;
+        addMessage('assistant', m.content);
+      }
+    }
+    if (lastAssistantText) showActions();
+    renderWelcome();
+    closeHistory();
+    updateSelectionInfo();
   }
 
   /* ---------- Word 集成 ---------- */
@@ -326,6 +478,7 @@
       if (conversation.length > MAX_HISTORY * 2) {
         conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
       }
+      saveCurrentConversation();
       showActions();
     } catch (err) {
       bubble.classList.add('error');
@@ -340,8 +493,10 @@
   }
 
   function newChat() {
+    saveCurrentConversation();
     conversation = [];
     lastAssistantText = '';
+    currentConvId = null;
     els.messages.innerHTML = '';
     els.actionBar.classList.add('hidden');
     renderWelcome();
@@ -385,6 +540,12 @@
     });
     els.newChatBtn.addEventListener('click', newChat);
     els.settingsBtn.addEventListener('click', openSettings);
+    els.historyBtn.addEventListener('click', openHistory);
+    els.historyCloseBtn.addEventListener('click', closeHistory);
+    els.historyBackdrop.addEventListener('click', closeHistory);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeHistory();
+    });
     els.cancelSettingsBtn.addEventListener('click', closeSettings);
     els.saveSettingsBtn.addEventListener('click', saveSettings);
     els.settingsModal.addEventListener('click', (e) => {
@@ -404,6 +565,7 @@
     bind();
     renderWelcome();
     refreshStatus();
+    if (!apiKey) openSettings();
   });
 
   if (typeof Office !== 'undefined' && Office.onReady) {
