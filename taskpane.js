@@ -27,8 +27,9 @@
   let streaming = false;
   let lastAssistantText = '';
   let lastReasoningText = '';
-  let pendingEdit = null; // { insertedText, replacedText, applied }
-  let toggleBtnEl = null;
+  let pendingEdit = null; // 最新回复未应用记录 { insertedText, replacedText, applied, bubbleEl }
+  let editLog = []; // 已应用的修改记录（按应用顺序）
+  let pendingRollback = null; // 待回退的记录（确认弹窗）
   let currentConvId = null;
   let conversations = loadHistory();
   let cachedModels = null;
@@ -61,6 +62,10 @@
     settingsStatus: $('settingsStatus'),
     saveSettingsBtn: $('saveSettingsBtn'),
     cancelSettingsBtn: $('cancelSettingsBtn'),
+    confirmModal: $('confirmModal'),
+    confirmMsg: $('confirmMsg'),
+    confirmOkBtn: $('confirmOkBtn'),
+    confirmCancelBtn: $('confirmCancelBtn'),
   };
 
   /* ---------- 通用 UI ---------- */
@@ -274,7 +279,9 @@
     conversation = conv.messages.slice();
     lastAssistantText = '';
     els.messages.innerHTML = '';
-    toggleBtnEl = null;
+    pendingEdit = null;
+    editLog = [];
+    pendingRollback = null;
 
     for (const m of conversation) {
       if (m.role === 'user') {
@@ -422,94 +429,119 @@
     });
   }
 
-  async function autoApplyReply() {
-    const text = lastAssistantText;
-    const extracted = text ? extractInsertText(text) : null;
-    if (extracted === null) {
-      pendingEdit = null; // 纯回答，无可写入正文
-      updateToggleBtn();
-      return;
-    }
-    pendingEdit = { insertedText: normalizeText(extracted), replacedText: '', applied: false };
-    if (!inOffice()) {
-      updateToggleBtn();
-      return;
-    }
-    try {
-      await performApply(pendingEdit);
-      pendingEdit.applied = true;
-    } catch (err) {
-      toast('自动应用失败：' + err.message, true);
-    }
-    updateToggleBtn();
-  }
-
-  async function onToggleBtn() {
-    if (!pendingEdit) return;
-    if (pendingEdit.applied) {
-      // 撤销：把上次写入的内容还原
-      try {
-        await Word.run(async (context) => {
-          const matches = context.document.body.search(pendingEdit.insertedText);
-          context.load(matches, 'text');
-          await context.sync();
-          if (!matches.items.length) {
-            throw new Error('未找到上次写入的内容（可能已被手动修改）');
-          }
-          const target = matches.items[0];
-          if (pendingEdit.replacedText) {
-            target.insertText(pendingEdit.replacedText, Word.InsertLocation.replace);
-          } else {
-            target.delete();
-          }
-          await context.sync();
-        });
-        pendingEdit.applied = false;
-        toast('已撤销，可点击“接受”重新应用');
-      } catch (err) {
-        toast('撤销失败：' + err.message, true);
-      }
-    } else {
-      // 接受：把回复写入文档
-      if (!inOffice()) {
-        toast('当前不在 Word 中运行，无法应用', true);
-        return;
-      }
-      try {
-        await performApply(pendingEdit);
-        pendingEdit.applied = true;
-        toast('已应用到文档');
-      } catch (err) {
-        toast('应用失败：' + err.message, true);
-      }
-    }
-    updateToggleBtn();
-  }
-
-  function updateToggleBtn() {
-    if (!toggleBtnEl) return;
-    if (!pendingEdit) {
-      toggleBtnEl.disabled = true;
-      toggleBtnEl.textContent = '接受';
-      toggleBtnEl.title = '';
-      return;
-    }
-    toggleBtnEl.disabled = false;
-    toggleBtnEl.textContent = pendingEdit.applied ? '撤销' : '接受';
-    toggleBtnEl.title = pendingEdit.applied ? '撤销上次自动写入' : '将回复应用到文档';
-  }
-
-  function appendToggleButton(bubble) {
+  function appendToggleButton(bubble, record) {
     const wrap = document.createElement('div');
     wrap.className = 'reply-actions';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'toggle-btn';
-    btn.addEventListener('click', onToggleBtn);
+    btn.addEventListener('click', () => onRecordBtn(record));
     wrap.appendChild(btn);
     bubble.appendChild(wrap);
-    toggleBtnEl = btn;
-    updateToggleBtn();
+    record.btnEl = btn;
+    updateButtonFor(record);
+  }
+
+  function updateButtonFor(record) {
+    const btn = record.btnEl;
+    if (!btn) return;
+    btn.disabled = false;
+    btn.textContent = record.applied ? '回退' : '接受';
+    btn.title = record.applied ? '回退到此次修改之前' : '将回复应用到文档';
+  }
+
+  function onRecordBtn(record) {
+    if (record.applied) {
+      showConfirmRollback(record);
+    } else {
+      applyRecord(record);
+    }
+  }
+
+  async function applyRecord(record) {
+    if (!inOffice()) {
+      toast('当前不在 Word 中运行，无法应用', true);
+      return;
+    }
+    try {
+      await performApply(record);
+      record.applied = true;
+      editLog.push(record);
+      updateButtonFor(record);
+      toast('已应用到文档');
+    } catch (err) {
+      toast('应用失败：' + err.message, true);
+    }
+  }
+
+  async function autoApplyReply(bubble) {
+    const text = lastAssistantText;
+    const extracted = text ? extractInsertText(text) : null;
+    if (extracted === null) {
+      pendingEdit = null; // 纯回答，无可写入正文
+      return;
+    }
+    const record = { insertedText: normalizeText(extracted), replacedText: '', applied: false, bubbleEl: bubble };
+    pendingEdit = record;
+    appendToggleButton(bubble, record);
+    if (!inOffice()) return;
+    try {
+      await performApply(record);
+      record.applied = true;
+      editLog.push(record);
+      pendingEdit = null;
+      updateButtonFor(record);
+    } catch (err) {
+      toast('自动应用失败：' + err.message, true);
+    }
+  }
+
+  async function rollbackTo(record) {
+    const idx = editLog.indexOf(record);
+    if (idx < 0) return;
+    const targets = editLog.slice(idx);
+    try {
+      await Word.run(async (context) => {
+        for (let i = targets.length - 1; i >= 0; i--) {
+          const rec = targets[i];
+          const matches = context.document.body.search(rec.insertedText);
+          context.load(matches, 'text');
+          await context.sync();
+          if (!matches.items.length) {
+            throw new Error('未找到该回复写入的内容（可能已被手动修改）');
+          }
+          const target = matches.items[0];
+          if (rec.replacedText) {
+            target.insertText(rec.replacedText, Word.InsertLocation.replace);
+          } else {
+            target.delete();
+          }
+          await context.sync();
+        }
+      });
+      for (const rec of targets) {
+        rec.applied = false;
+        updateButtonFor(rec);
+      }
+      editLog = editLog.slice(0, idx);
+      toast('已回退到该回复之前');
+    } catch (err) {
+      toast('回退失败：' + err.message, true);
+    }
+  }
+
+  function showConfirmRollback(record) {
+    pendingRollback = record;
+    const later = editLog.indexOf(record) >= 0 ? editLog.length - editLog.indexOf(record) - 1 : 0;
+    els.confirmMsg.textContent = later > 0
+      ? '将撤销该回复写入的内容，以及其后的 ' + later + ' 条修改。确定回退到此次修改之前吗？'
+      : '将撤销该回复写入的内容。确定回退到此次修改之前吗？';
+    els.confirmModal.classList.remove('hidden');
+  }
+
+  function closeConfirm() {
+    els.confirmModal.classList.add('hidden');
+    pendingRollback = null;
   }
 
   /* ---------- 对话逻辑 ---------- */
@@ -646,13 +678,7 @@
         conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
       }
       saveCurrentConversation();
-      await autoApplyReply();
-      els.messages.querySelectorAll('.reply-actions').forEach((el) => el.remove());
-      if (pendingEdit) {
-        appendToggleButton(bubble);
-      } else {
-        toggleBtnEl = null;
-      }
+      await autoApplyReply(bubble);
     } catch (err) {
       bubble.classList.add('error');
       bubble.innerHTML = '请求失败：' + escapeHtml(err.message || String(err));
@@ -672,7 +698,9 @@
     lastReasoningText = '';
     currentConvId = null;
     els.messages.innerHTML = '';
-    toggleBtnEl = null;
+    pendingEdit = null;
+    editLog = [];
+    pendingRollback = null;
     renderWelcome();
     updateSelectionInfo();
   }
@@ -815,6 +843,15 @@
     els.settingsModal.addEventListener('click', (e) => {
       if (e.target === els.settingsModal) closeSettings();
     });
+    els.confirmOkBtn.addEventListener('click', () => {
+      const rec = pendingRollback;
+      closeConfirm();
+      if (rec) rollbackTo(rec);
+    });
+    els.confirmCancelBtn.addEventListener('click', closeConfirm);
+    els.confirmModal.addEventListener('click', (e) => {
+      if (e.target === els.confirmModal) closeConfirm();
+    });
     els.refreshCtxBtn.addEventListener('click', updateSelectionInfo);
   }
 
@@ -826,7 +863,6 @@
     bind();
     renderWelcome();
     refreshStatus();
-    updateToggleBtn();
     if (!apiKey) openSettings();
   });
 

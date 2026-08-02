@@ -84,6 +84,18 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <!-- 回退确认弹窗 -->
+  <div id="confirmModal" class="modal-mask hidden">
+    <div class="modal">
+      <h2>回退确认</h2>
+      <p id="confirmMsg" class="modal-note"></p>
+      <div class="modal-actions">
+        <button id="confirmCancelBtn" class="action-btn">取消</button>
+        <button id="confirmOkBtn" class="action-btn primary">确定</button>
+      </div>
+    </div>
+  </div>
+
   <script src="taskpane.js"></script>
 </body>
 </html>
