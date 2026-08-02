@@ -686,7 +686,7 @@
   function bind() {
     els.sendBtn.addEventListener('click', handleSend);
     els.userInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
