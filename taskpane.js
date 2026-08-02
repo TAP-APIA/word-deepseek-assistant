@@ -471,10 +471,16 @@
       contextNote = await gatherContext();
     } catch (err) {
       console.warn('读取文档上下文失败：', err);
-      els.ctxInfo.textContent = '读取上下文失败';
+      els.ctxInfo.textContent = '读取上下文失败：' + (err && err.message ? err.message : String(err));
     }
     const userContent = contextNote ? `${text}\n\n${contextNote}` : text;
     conversation.push({ role: 'user', content: userContent });
+    setStatus(
+      contextNote
+        ? '已附带文档上下文，正在生成回复…'
+        : '未附带文档内容（请勾选“附带文档内容”或“附带选中内容”）',
+      !contextNote
+    );
 
     const bubble = addMessage('assistant', '', true);
     try {
