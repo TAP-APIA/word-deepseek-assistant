@@ -281,7 +281,7 @@
     }
     try {
       await Word.run(async (context) => {
-        const sel = context.document.getSelection();
+        const sel = context.document.getSelection().getRange();
         const t = sel.getText();
         await context.sync();
         const len = (t.value || '').trim().length;
@@ -328,7 +328,7 @@
       return await Word.run(async (context) => {
         let selRef = null;
         if (wantSelection) {
-          selRef = context.document.getSelection().getText();
+        selRef = context.document.getSelection().getRange().getText();
         }
         let bodyRef = null;
         if (wantDoc) {
@@ -376,10 +376,11 @@
     }
     try {
       await Word.run(async (context) => {
+        const selRange = context.document.getSelection().getRange();
         if (kind === 'replace') {
-          context.document.getSelection().insertText(normalizeText(text), Word.InsertLocation.replace);
+          selRange.insertText(normalizeText(text), Word.InsertLocation.replace);
         } else if (kind === 'after') {
-          context.document.getSelection().insertText(normalizeText(text), Word.InsertLocation.after);
+          selRange.insertText(normalizeText(text), Word.InsertLocation.after);
         } else if (kind === 'start') {
           context.document.body.insertText(normalizeText(text), Word.InsertLocation.start);
         } else if (kind === 'end') {
