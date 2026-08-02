@@ -277,6 +277,9 @@ body {
   color: #fff;
 }
 .action-btn.primary:hover { background: #3e5bf0; }
+.action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.fetch-btn { width: 100%; margin-bottom: 12px; }
 
 /* 输入区 */
 .composer {
@@ -297,28 +300,28 @@ body {
 textarea {
   flex: 1;
   width: 100%;
-  resize: none;
+  resize: vertical;
   border: 1px solid #d1d5db;
   border-radius: 12px;
-  padding: 8px 78px 8px 10px;
+  padding: 10px 78px 10px 10px;
   font-size: 13px;
   font-family: inherit;
   outline: none;
-  min-height: 44px;
-  max-height: 120px;
+  min-height: 92px;
+  max-height: 55vh;
 }
 textarea:focus { border-color: #4d6bfe; box-shadow: 0 0 0 2px rgba(77, 107, 254, 0.15); }
 
 .send-btn {
   position: absolute;
-  right: 6px;
-  bottom: 6px;
-  height: 34px;
+  right: 10px;
+  bottom: 18px;
+  height: 32px;
   padding: 0 14px;
   background: #4d6bfe;
   color: #fff;
   border: none;
-  border-radius: 17px;
+  border-radius: 16px;
   font-size: 13px;
   cursor: pointer;
 }

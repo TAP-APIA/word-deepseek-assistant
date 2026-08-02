@@ -6,6 +6,7 @@
 
   // 直连 DeepSeek 官方 API（已实测支持浏览器 CORS 跨域，无需本地服务）
   const DEEPSEEK_API = 'https://api.deepseek.com/chat/completions';
+  const MODELS_API = 'https://api.deepseek.com/models';
   const MAX_HISTORY = 20; // 发送给模型的对话轮数上限
   const HISTORY_KEY = 'ds_conversations';
   const MAX_HISTORY_CONV = 20;
@@ -17,6 +18,7 @@
   let lastAssistantText = '';
   let currentConvId = null;
   let conversations = loadHistory();
+  let cachedModels = null;
 
   const $ = (id) => document.getElementById(id);
 
@@ -43,6 +45,8 @@
     apiKeyInput: $('apiKeyInput'),
     modelSelect: $('modelSelect'),
     customModelInput: $('customModelInput'),
+    fetchModelsBtn: $('fetchModelsBtn'),
+    settingsStatus: $('settingsStatus'),
     saveSettingsBtn: $('saveSettingsBtn'),
     cancelSettingsBtn: $('cancelSettingsBtn'),
   };
@@ -300,29 +304,31 @@
     }
 
     return Word.run(async (context) => {
-      const jobs = [];
+      let selRef = null;
       if (wantSelection) {
-        const sel = context.document.getSelection();
-        jobs.push({ kind: 'sel', ref: sel.getText() });
+        selRef = context.document.getSelection().getText();
       }
+      let bodyRef = null;
       if (wantDoc) {
-        jobs.push({ kind: 'doc', ref: context.document.body.getText() });
+        bodyRef = context.document.body;
+        context.load(bodyRef, 'text');
       }
       await context.sync();
 
       const parts = [];
-      for (const job of jobs) {
-        const text = (job.ref.value || '').trim();
-        if (job.kind === 'sel') {
-          els.ctxInfo.textContent = `已选 ${text.length} 字`;
-          if (text.length > 0) parts.push(`【当前选中内容】（${text.length} 字）：\n${text.slice(0, 2000)}`);
-        } else {
-          if (text.length > 0) parts.push(`【文档开头】（前 4000 字）：\n${text.slice(0, 4000)}`);
-        }
+      if (wantSelection) {
+        const selText = (selRef.value || '').trim();
+        els.ctxInfo.textContent = `已选 ${selText.length} 字`;
+        if (selText.length > 0) parts.push(`【当前选中内容】（${selText.length} 字）：\n${selText.slice(0, 2000)}`);
+      }
+      if (wantDoc) {
+        const docText = (bodyRef.text || '').trim();
+        els.ctxInfo.textContent = (els.ctxInfo.textContent ? els.ctxInfo.textContent + '；' : '') + `已读文档 ${docText.length} 字`;
+        if (docText.length > 0) parts.push(`【文档内容】（全文 ${docText.length} 字，附前 8000 字）：\n${docText.slice(0, 8000)}`);
       }
       if (parts.length === 0) return '';
       return (
-        '以下是当前 Word 文档中读取到的上下文（来自“附带选中内容/文档开头”选项），请基于这些内容回答，不要编造文档里不存在的细节：\n' +
+        '以下是当前 Word 文档中读取到的上下文（来自“附带选中内容/附带文档内容”选项），请基于这些内容回答，不要编造文档里不存在的细节：\n' +
         parts.join('\n\n')
       );
     });
@@ -507,9 +513,16 @@
 
   function openSettings() {
     els.apiKeyInput.value = apiKey;
-    els.modelSelect.value = ['deepseek-chat', 'deepseek-reasoner'].includes(model) ? model : 'deepseek-chat';
     els.customModelInput.value = ['deepseek-chat', 'deepseek-reasoner'].includes(model) ? '' : model;
     els.settingsModal.classList.remove('hidden');
+    els.saveSettingsBtn.disabled = true;
+    if (apiKey) {
+      els.modelSelect.innerHTML = '<option value="">正在获取模型列表…</option>';
+      fetchModels();
+    } else {
+      els.modelSelect.innerHTML = '<option value="">填写 API Key 后点击“获取模型列表”</option>';
+      setSettingsStatus('请先填写 DeepSeek API Key，再获取模型列表');
+    }
     els.apiKeyInput.focus();
   }
 
@@ -517,15 +530,78 @@
     els.settingsModal.classList.add('hidden');
   }
 
+  function setSettingsStatus(msg, isError = false) {
+    els.settingsStatus.textContent = msg;
+    els.settingsStatus.style.color = isError ? '#b91c1c' : '#6b7280';
+  }
+
+  function populateModelSelect(list) {
+    els.modelSelect.innerHTML = '';
+    const opts = list.slice();
+    if (model && !opts.includes(model)) opts.unshift(model);
+    for (const id of opts) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = id;
+      if (id === model) opt.selected = true;
+      els.modelSelect.appendChild(opt);
+    }
+    els.modelSelect.disabled = false;
+    els.saveSettingsBtn.disabled = false;
+  }
+
+  async function fetchModels() {
+    const key = els.apiKeyInput.value.trim();
+    if (!key) {
+      setSettingsStatus('请先填写 DeepSeek API Key', true);
+      return;
+    }
+    apiKey = key;
+    localStorage.setItem('ds_api_key', key);
+    refreshStatus();
+    setSettingsStatus('正在获取模型列表…');
+    try {
+      const res = await fetch(MODELS_API, {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const j = await res.json();
+          detail = (j.error && (j.error.message || j.error)) || JSON.stringify(j);
+        } catch {
+          detail = await res.text();
+        }
+        if (res.status === 401) throw new Error('API Key 无效（401）');
+        if (res.status === 429) throw new Error('请求过于频繁（429），请稍后再试');
+        throw new Error(detail || `请求失败（HTTP ${res.status}）`);
+      }
+      const j = await res.json();
+      const list = (j.data || []).map((m) => m.id).filter(Boolean);
+      if (!list.length) throw new Error('模型列表为空');
+      cachedModels = list;
+      populateModelSelect(list);
+      setSettingsStatus('模型列表已更新（共 ' + list.length + ' 个），选择后点击“保存设置”');
+    } catch (err) {
+      populateModelSelect(['deepseek-chat', 'deepseek-reasoner']);
+      setSettingsStatus('获取模型失败：' + err.message + '。已保留常用模型，也可在“自定义模型”中手动填写。', true);
+    }
+  }
+
   function saveSettings() {
     apiKey = els.apiKeyInput.value.trim();
     const custom = els.customModelInput.value.trim();
-    model = custom || els.modelSelect.value;
+    const selected = els.modelSelect.value;
+    if (!custom && !selected) {
+      toast('请先获取模型列表并选择模型', true);
+      return;
+    }
+    model = custom || selected;
     localStorage.setItem('ds_api_key', apiKey);
     localStorage.setItem('ds_model', model);
     closeSettings();
     refreshStatus();
-    toast('设置已保存' + (apiKey ? '' : '（未填写 API Key）'));
+    toast('设置已保存：' + model);
   }
 
   /* ---------- 初始化 ---------- */
@@ -540,6 +616,13 @@
     });
     els.newChatBtn.addEventListener('click', newChat);
     els.settingsBtn.addEventListener('click', openSettings);
+    els.fetchModelsBtn.addEventListener('click', fetchModels);
+    els.customModelInput.addEventListener('input', () => {
+      els.saveSettingsBtn.disabled = !els.customModelInput.value.trim() && !els.modelSelect.value;
+    });
+    els.modelSelect.addEventListener('change', () => {
+      els.saveSettingsBtn.disabled = false;
+    });
     els.historyBtn.addEventListener('click', openHistory);
     els.historyCloseBtn.addEventListener('click', closeHistory);
     els.historyBackdrop.addEventListener('click', closeHistory);

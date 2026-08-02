@@ -35,7 +35,7 @@
 
     <section class="context-bar">
       <label class="check"><input type="checkbox" id="includeSelection" checked /> 附带选中内容</label>
-      <label class="check"><input type="checkbox" id="includeDocStart" /> 附带文档开头</label>
+      <label class="check"><input type="checkbox" id="includeDocStart" checked /> 附带文档内容</label>
       <button id="refreshCtxBtn" class="mini-btn" title="刷新选中内容信息">刷新</button>
       <span id="ctxInfo" class="ctx-info"></span>
     </section>
@@ -54,7 +54,7 @@
 
     <footer class="composer">
       <div class="input-wrap">
-        <textarea id="userInput" rows="2" placeholder="输入指令，例如：帮我润色选中的段落，改成更正式的语气…"></textarea>
+        <textarea id="userInput" rows="4" placeholder="输入指令，例如：帮我润色选中的段落，改成更正式的语气…"></textarea>
         <button id="sendBtn" class="send-btn">发送</button>
       </div>
       <div id="statusLine" class="status-line"></div>
@@ -69,24 +69,25 @@
         <span>DeepSeek API Key</span>
         <input type="password" id="apiKeyInput" placeholder="sk-…" autocomplete="off" />
       </label>
+      <button id="fetchModelsBtn" class="action-btn primary fetch-btn">获取模型列表</button>
       <label class="field">
-        <span>模型</span>
-        <select id="modelSelect">
-          <option value="deepseek-chat">deepseek-chat（通用对话）</option>
-          <option value="deepseek-reasoner">deepseek-reasoner（深度思考）</option>
+        <span>模型（来自 DeepSeek API 实时拉取）</span>
+        <select id="modelSelect" disabled>
+          <option value="">填写 API Key 后点击“获取模型列表”</option>
         </select>
       </label>
       <label class="field">
         <span>自定义模型（可选）</span>
         <input type="text" id="customModelInput" placeholder="留空使用上方模型" />
       </label>
+      <p id="settingsStatus" class="modal-note"></p>
       <p class="modal-note">
         API Key 仅保存在本机浏览器的本地存储中，请求直接发送给 DeepSeek 官方 API（已实测支持浏览器跨域直连）。
         本版本无需本地服务，任务窗格页面由静态托管提供。
       </p>
       <div class="modal-actions">
         <button id="cancelSettingsBtn" class="action-btn">取消</button>
-        <button id="saveSettingsBtn" class="action-btn primary">保存</button>
+        <button id="saveSettingsBtn" class="action-btn primary" disabled>保存设置</button>
       </div>
     </div>
   </div>
