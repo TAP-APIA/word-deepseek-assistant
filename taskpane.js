@@ -17,9 +17,12 @@
   const MAX_HISTORY = 20; // 发送给模型的对话轮数上限
   const HISTORY_KEY = 'ds_conversations';
   const MAX_HISTORY_CONV = 20;
+  // deepseek-chat / deepseek-reasoner 已于 2026-07-24 弃用
+  const LEGACY_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
+  const FALLBACK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
 
   let apiKey = localStorage.getItem('ds_api_key') || '';
-  let model = localStorage.getItem('ds_model') || 'deepseek-chat';
+  let model = localStorage.getItem('ds_model') || '';
   let conversation = [];
   let streaming = false;
   let lastAssistantText = '';
@@ -527,6 +530,11 @@
       openSettings();
       return;
     }
+    if (!model || LEGACY_MODELS.includes(model)) {
+      toast('当前模型已弃用或未选择，请先在设置中重新选择模型', true);
+      openSettings();
+      return;
+    }
 
     streaming = true;
     els.sendBtn.disabled = true;
@@ -590,7 +598,7 @@
 
   function openSettings() {
     els.apiKeyInput.value = apiKey;
-    els.customModelInput.value = ['deepseek-chat', 'deepseek-reasoner'].includes(model) ? '' : model;
+    els.customModelInput.value = LEGACY_MODELS.includes(model) ? '' : model;
     els.settingsModal.classList.remove('hidden');
     els.saveSettingsBtn.disabled = true;
     if (apiKey) {
@@ -615,13 +623,22 @@
   function populateModelSelect(list) {
     els.modelSelect.innerHTML = '';
     const opts = list.slice();
-    if (model && !opts.includes(model)) opts.unshift(model);
+    if (model && !LEGACY_MODELS.includes(model) && !opts.includes(model)) {
+      opts.unshift(model);
+    }
+    let selected = false;
     for (const id of opts) {
       const opt = document.createElement('option');
       opt.value = id;
       opt.textContent = id;
-      if (id === model) opt.selected = true;
+      if (id === model && !LEGACY_MODELS.includes(model)) {
+        opt.selected = true;
+        selected = true;
+      }
       els.modelSelect.appendChild(opt);
+    }
+    if (!selected && opts.length) {
+      els.modelSelect.selectedIndex = 0;
     }
     els.modelSelect.disabled = false;
     els.saveSettingsBtn.disabled = false;
@@ -660,8 +677,8 @@
       populateModelSelect(list);
       setSettingsStatus('模型列表已更新（共 ' + list.length + ' 个），选择后点击“保存设置”');
     } catch (err) {
-      populateModelSelect(['deepseek-chat', 'deepseek-reasoner']);
-      setSettingsStatus('获取模型失败：' + err.message + '。已保留常用模型，也可在“自定义模型”中手动填写。', true);
+      populateModelSelect(FALLBACK_MODELS);
+      setSettingsStatus('获取模型失败：' + err.message + '。已显示当前官方模型（deepseek-v4-flash / deepseek-v4-pro），也可在"自定义模型"中手动填写。', true);
     }
   }
 
@@ -674,6 +691,10 @@
       return;
     }
     model = custom || selected;
+    if (LEGACY_MODELS.includes(model)) {
+      toast('警告：' + model + ' 已弃用（2026-07-24），请选择 deepseek-v4-flash 或 deepseek-v4-pro', true);
+      return;
+    }
     localStorage.setItem('ds_api_key', apiKey);
     localStorage.setItem('ds_model', model);
     closeSettings();

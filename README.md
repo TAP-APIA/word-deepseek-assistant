@@ -59,7 +59,7 @@ flowchart LR
 
 ## 使用说明
 
-1. 首次使用点击侧边栏右上角 ⚙，填入 DeepSeek API Key（平台：platform.deepseek.com），可切换模型（`deepseek-chat` / `deepseek-reasoner`）。
+1. 首次使用点击侧边栏右上角 ⚙，填入 DeepSeek API Key（平台：platform.deepseek.com），可切换模型（`deepseek-v4-flash` / `deepseek-v4-pro`）。
 2. 在 Word 里选中一段文字，勾选"附带选中内容"。
 3. 输入指令，例如：
    - "把选中的段落润色得更正式一些"
