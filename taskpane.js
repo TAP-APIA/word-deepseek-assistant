@@ -282,9 +282,9 @@
     try {
       await Word.run(async (context) => {
         const sel = context.document.getSelection().getRange();
-        const t = sel.getText();
+        context.load(sel, 'text');
         await context.sync();
-        const len = (t.value || '').trim().length;
+        const len = (sel.text || '').trim().length;
         els.ctxInfo.textContent = len > 0 ? `已选 ${len} 字` : '当前无选中内容';
       });
     } catch {
@@ -328,7 +328,8 @@
       return await Word.run(async (context) => {
         let selRef = null;
         if (wantSelection) {
-        selRef = context.document.getSelection().getRange().getText();
+          selRef = context.document.getSelection().getRange();
+          context.load(selRef, 'text');
         }
         let bodyRef = null;
         if (wantDoc) {
@@ -339,7 +340,7 @@
 
         const parts = [];
         if (wantSelection) {
-          const selText = (selRef.value || '').trim();
+          const selText = (selRef.text || '').trim();
           els.ctxInfo.textContent = `已选 ${selText.length} 字`;
           if (selText.length > 0) parts.push(`【当前选中内容】（${selText.length} 字）：\n${selText.slice(0, 2000)}`);
         }
