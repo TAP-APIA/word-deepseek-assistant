@@ -26,6 +26,7 @@
   let conversation = [];
   let streaming = false;
   let lastAssistantText = '';
+  let lastReasoningText = '';
   let currentConvId = null;
   let conversations = loadHistory();
   let cachedModels = null;
@@ -38,7 +39,6 @@
     userInput: $('userInput'),
     sendBtn: $('sendBtn'),
     actionBar: $('actionBar'),
-    actionNote: $('actionNote'),
     newChatBtn: $('newChatBtn'),
     settingsBtn: $('settingsBtn'),
     historyBtn: $('historyBtn'),
@@ -103,6 +103,18 @@
     return html;
   }
 
+  function renderAssistantHtml(reasoning, content) {
+    let html = '';
+    if (reasoning) {
+      html += '<details class="reasoning" open><summary>思考过程</summary><div class="reasoning-body">' +
+        formatMessage(reasoning) + '</div></details>';
+    }
+    const body = formatMessage(content);
+    if (body) html += body;
+    if (!html) html = '（空）';
+    return html;
+  }
+
   function scrollToBottom() {
     els.messages.scrollTop = els.messages.scrollHeight;
   }
@@ -117,13 +129,15 @@
     els.messages.appendChild(div);
   }
 
-  function addMessage(role, text, isStreaming = false) {
+  function addMessage(role, text, isStreaming = false, reasoning = '') {
     const div = document.createElement('div');
     div.className = `msg ${role}`;
     if (isStreaming) {
       div.innerHTML = '<span class="typing"></span>';
     } else {
-      div.innerHTML = formatMessage(text) || '（空）';
+      div.innerHTML = role === 'assistant'
+        ? renderAssistantHtml(reasoning, text)
+        : formatMessage(text) || '（空）';
     }
     els.messages.appendChild(div);
     scrollToBottom();
@@ -270,12 +284,12 @@
         addMessage('user', stripContext(m.content));
       } else if (m.role === 'assistant') {
         lastAssistantText = m.content;
-        addMessage('assistant', m.content);
+        lastReasoningText = m.reasoning || '';
+        addMessage('assistant', m.content, false, lastReasoningText);
       }
     }
     if (lastAssistantText) {
       showActions();
-      updateActionNote();
     }
     renderWelcome();
     closeHistory();
@@ -398,16 +412,6 @@
     return blocks.length ? blocks.join('\n\n') : null;
   }
 
-  function hasCodeBlock(text) {
-    return /```/.test(text);
-  }
-
-  function updateActionNote() {
-    els.actionNote.textContent = hasCodeBlock(lastAssistantText)
-      ? '检测到代码块：点击下方按钮将只插入代码块内的正文（修改说明不会写入）'
-      : '将插入整条回复';
-  }
-
   async function applyAction(kind) {
     const text = lastAssistantText;
     if (!text) return;
@@ -442,6 +446,7 @@
 
   async function streamChat(bubble) {
     lastAssistantText = '';
+    lastReasoningText = '';
     let res;
     try {
       res = await fetch(DEEPSEEK_API, {
@@ -478,7 +483,8 @@
     if (!res.body) {
       const j = await res.json();
       lastAssistantText = (j.choices && j.choices[0] && j.choices[0].message.content) || '';
-      bubble.innerHTML = formatMessage(lastAssistantText) || '（空回复）';
+      lastReasoningText = (j.choices && j.choices[0] && j.choices[0].message.reasoning_content) || '';
+      bubble.innerHTML = renderAssistantHtml(lastReasoningText, lastAssistantText);
       return;
     }
 
@@ -501,12 +507,13 @@
           if (data === '[DONE]') continue;
           try {
             const j = JSON.parse(data);
-            const delta = j.choices && j.choices[0] && j.choices[0].delta
-              ? j.choices[0].delta.content || ''
-              : '';
-            if (delta) {
-              lastAssistantText += delta;
-              bubble.innerHTML = formatMessage(lastAssistantText);
+            const d = j.choices && j.choices[0] ? j.choices[0].delta || {} : {};
+            const delta = d.content || '';
+            const rdelta = d.reasoning_content || '';
+            if (rdelta || delta) {
+              if (rdelta) lastReasoningText += rdelta;
+              if (delta) lastAssistantText += delta;
+              bubble.innerHTML = renderAssistantHtml(lastReasoningText, lastAssistantText);
               scrollToBottom();
             }
           } catch {
@@ -516,10 +523,10 @@
       }
     }
 
-    if (!lastAssistantText) {
+    if (!lastAssistantText && !lastReasoningText) {
       throw new Error('未收到模型回复');
     }
-    bubble.innerHTML = formatMessage(lastAssistantText);
+    bubble.innerHTML = renderAssistantHtml(lastReasoningText, lastAssistantText);
   }
 
   async function handleSend() {
@@ -563,14 +570,13 @@
     const bubble = addMessage('assistant', '', true);
     try {
       await streamChat(bubble);
-      conversation.push({ role: 'assistant', content: lastAssistantText });
+      conversation.push({ role: 'assistant', content: lastAssistantText, reasoning: lastReasoningText });
       // 控制历史长度
       if (conversation.length > MAX_HISTORY * 2) {
         conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
       }
       saveCurrentConversation();
       showActions();
-      updateActionNote();
     } catch (err) {
       bubble.classList.add('error');
       bubble.innerHTML = '请求失败：' + escapeHtml(err.message || String(err));
@@ -587,6 +593,7 @@
     saveCurrentConversation();
     conversation = [];
     lastAssistantText = '';
+    lastReasoningText = '';
     currentConvId = null;
     els.messages.innerHTML = '';
     els.actionBar.classList.add('hidden');

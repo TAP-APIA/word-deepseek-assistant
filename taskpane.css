@@ -242,6 +242,30 @@ body {
 
 .msg.user code { background: rgba(255, 255, 255, 0.2); }
 
+.msg .reasoning {
+  border-left: 3px solid #c7d2fe;
+  background: #f9fafb;
+  border-radius: 6px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.reasoning summary {
+  cursor: pointer;
+  color: #6b7280;
+  font-weight: 600;
+  user-select: none;
+}
+
+.reasoning-body {
+  margin-top: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  color: #6b7280;
+  line-height: 1.55;
+}
+
 .msg .typing::after {
   content: "▍";
   animation: blink 1s steps(2, start) infinite;
@@ -257,8 +281,6 @@ body {
 }
 
 .action-title { font-size: 12px; color: #6b7280; margin-bottom: 6px; }
-
-.action-note { font-size: 11px; color: #b45309; margin-bottom: 6px; }
 
 .action-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
