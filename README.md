@@ -19,3 +19,9 @@
 ## 使用环境
 
 - Microsoft 365 桌面版 Word（Windows），无需安装 Node.js 或运行任何本地服务。
+
+## 获取源码
+
+```bash
+git clone https://github.com/TAP-APIA/word-deepseek-assistant.git
+```
