@@ -113,6 +113,118 @@
     return html;
   }
 
+  // 把 Markdown 风格的回复转换成 Word insertHtml 支持的 HTML 子集，
+  // 让标题/加粗/列表/代码块等格式能真实落到文档里
+  function markdownToWordHtml(text) {
+    const lines = String(text || '').split(/\r\n|\r|\n/);
+    const out = [];
+    let i = 0;
+    let inCode = false;
+    let codeBuf = [];
+    let para = [];
+
+    function inline(s) {
+      return escapeHtml(s)
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+        .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+        .replace(/`([^`]+)`/g, '<span style="font-family:Consolas,monospace">$1</span>')
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+    }
+
+    function flushPara() {
+      if (para.length) {
+        out.push('<p>' + inline(para.join(' ')) + '</p>');
+        para = [];
+      }
+    }
+
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('```')) {
+        if (!inCode) {
+          flushPara();
+          inCode = true;
+          codeBuf = [];
+        } else {
+          out.push('<p style="font-family:Consolas,monospace">' + escapeHtml(codeBuf.join('\n')).replace(/\n/g, '<br>') + '</p>');
+          inCode = false;
+          codeBuf = [];
+        }
+        i++;
+        continue;
+      }
+
+      if (inCode) {
+        codeBuf.push(line);
+        i++;
+        continue;
+      }
+
+      if (!trimmed) {
+        flushPara();
+        i++;
+        continue;
+      }
+
+      const h = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+      if (h) {
+        flushPara();
+        const lv = h[1].length;
+        out.push('<h' + lv + '>' + inline(h[2]) + '</h' + lv + '>');
+        i++;
+        continue;
+      }
+
+      const ul = /^[-*]\s+(.*)$/.exec(trimmed);
+      if (ul) {
+        flushPara();
+        const items = [];
+        while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+          items.push('<li>' + inline(lines[i].trim().replace(/^[-*]\s+/, '')) + '</li>');
+          i++;
+        }
+        out.push('<ul>' + items.join('') + '</ul>');
+        continue;
+      }
+
+      const ol = /^\d+[.)]\s+(.*)$/.exec(trimmed);
+      if (ol) {
+        flushPara();
+        const items = [];
+        while (i < lines.length && /^\d+[.)]\s+/.test(lines[i].trim())) {
+          items.push('<li>' + inline(lines[i].trim().replace(/^\d+[.)]\s+/, '')) + '</li>');
+          i++;
+        }
+        out.push('<ol>' + items.join('') + '</ol>');
+        continue;
+      }
+
+      const q = /^>\s?(.*)$/.exec(trimmed);
+      if (q) {
+        flushPara();
+        const quotes = [];
+        while (i < lines.length && /^>\s?/.test(lines[i].trim())) {
+          quotes.push(inline(lines[i].trim().replace(/^>\s?/, '')));
+          i++;
+        }
+        out.push('<p style="margin-left:24px;color:#6b7280">' + quotes.join('<br>') + '</p>');
+        continue;
+      }
+
+      para.push(trimmed);
+      i++;
+    }
+
+    flushPara();
+    if (inCode && codeBuf.length) {
+      out.push('<p style="font-family:Consolas,monospace">' + escapeHtml(codeBuf.join('\n')).replace(/\n/g, '<br>') + '</p>');
+    }
+    return out.join('');
+  }
+
   function renderAssistantHtml(reasoning, content) {
     let html = '';
     if (reasoning) {
@@ -498,10 +610,14 @@
         const before = context.document.body.getOoxml();
         await context.sync();
         rec.beforeOoxml = before.value;
-        if (replacedText.length > 0) {
-          selRange.insertText(rec.insertedText, Word.InsertLocation.replace);
+        const html = rec.insertedHtml || markdownToWordHtml(rec.insertedText);
+        const canHtml = typeof selRange.insertHtml === 'function';
+        const payload = canHtml ? html : rec.insertedText;
+        const loc = replacedText.length > 0 ? Word.InsertLocation.replace : Word.InsertLocation.after;
+        if (canHtml) {
+          selRange.insertHtml(payload, loc);
         } else {
-          selRange.insertText(rec.insertedText, Word.InsertLocation.after);
+          selRange.insertText(payload, loc);
         }
         await context.sync();
         const after = context.document.body.getOoxml();
@@ -534,7 +650,13 @@
       const hitRange = hits.items[0];
       const bmName = 'DS_EDIT_' + Date.now().toString(36) + '_' + editSeq;
       const newBm = context.document.bookmarks.add(bmName, hitRange);
-      newBm.getRange().insertText(rec.insertedText, Word.InsertLocation.end);
+      const html = rec.insertedHtml || markdownToWordHtml(rec.insertedText);
+      const range = newBm.getRange();
+      if (typeof range.insertHtml === 'function') {
+        range.insertHtml(html, Word.InsertLocation.end);
+      } else {
+        range.insertText(rec.insertedText, Word.InsertLocation.end);
+      }
       await context.sync();
 
       // 3) 删除标记（书签已扩展覆盖真实文本，删除标记不会影响书签）
@@ -628,7 +750,13 @@
       }
       const hitRange = hits.items[0];
       const newBm = context.document.bookmarks.add(rec.bookmarkName, hitRange);
-      newBm.getRange().insertText(rec.insertedText, Word.InsertLocation.end);
+      const html = rec.insertedHtml || markdownToWordHtml(rec.insertedText);
+      const range = newBm.getRange();
+      if (typeof range.insertHtml === 'function') {
+        range.insertHtml(html, Word.InsertLocation.end);
+      } else {
+        range.insertText(rec.insertedText, Word.InsertLocation.end);
+      }
       await context.sync();
 
       const hits2 = context.document.body.search(marker, MARKER_SEARCH_OPTS);
@@ -676,7 +804,7 @@
     if (record.isLatest) {
       // 最新一条回复：沿用原逻辑，撤销/接受切换
       btn.textContent = record.applied ? '撤销' : '接受';
-      btn.title = record.applied ? '撤销上次自动写入' : '将回复应用到文档';
+      btn.title = record.applied ? '撤销上次写入' : '将回复（含格式）应用到文档';
     } else {
       btn.textContent = record.applied ? '回退' : '接受';
       btn.title = record.applied ? '回退到此次修改之前' : '将回复应用到文档';
@@ -727,10 +855,9 @@
 
   async function autoApplyReply(bubble) {
     const text = lastAssistantText;
-    const extracted = text ? extractInsertText(text) : null;
-    if (extracted === null) {
-      return;
-    }
+    if (!text) return;
+    const extracted = extractInsertText(text);
+    const hasCode = extracted !== null;
     // 上一条编辑降级为“之前的回复”：已应用的进入回退列表，未应用的移除按钮
     if (latestEdit) {
       if (latestEdit.applied) {
@@ -744,7 +871,10 @@
       }
     }
     const record = {
-      insertedText: normalizeText(extracted),
+      insertedText: normalizeText(hasCode ? extracted : text),
+      insertedHtml: hasCode
+        ? '<p style="font-family:Consolas,monospace">' + escapeHtml(extracted).replace(/\n/g, '<br>') + '</p>'
+        : markdownToWordHtml(text),
       replacedText: '',
       applied: false,
       hadApplied: false,
@@ -755,6 +885,8 @@
     latestEdit = record;
     appendToggleButton(bubble, record);
     if (!inOffice()) return;
+    // 纯文本回复不自动写入（避免打扰），用户可点击“接受”手动应用
+    if (!hasCode) return;
     try {
       await performApply(record);
       record.applied = true;
