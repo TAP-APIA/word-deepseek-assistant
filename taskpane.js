@@ -857,7 +857,10 @@
     const text = lastAssistantText;
     if (!text) return;
     const extracted = extractInsertText(text);
-    const hasCode = extracted !== null;
+    // 只允许把回复中的代码块内容应用到文档。
+    // 回复里的说明性文字（建议、解释等）不属于正文，绝不能写入文档，
+    // 因此没有代码块时不显示“接受”按钮，防止误插入。
+    if (extracted === null) return;
     // 上一条编辑降级为“之前的回复”：已应用的进入回退列表，未应用的移除按钮
     if (latestEdit) {
       if (latestEdit.applied) {
@@ -871,10 +874,8 @@
       }
     }
     const record = {
-      insertedText: normalizeText(hasCode ? extracted : text),
-      insertedHtml: hasCode
-        ? '<p style="font-family:Consolas,monospace">' + escapeHtml(extracted).replace(/\n/g, '<br>') + '</p>'
-        : markdownToWordHtml(text),
+      insertedText: normalizeText(extracted),
+      insertedHtml: '<p style="font-family:Consolas,monospace">' + escapeHtml(extracted).replace(/\n/g, '<br>') + '</p>',
       replacedText: '',
       applied: false,
       hadApplied: false,
@@ -885,8 +886,6 @@
     latestEdit = record;
     appendToggleButton(bubble, record);
     if (!inOffice()) return;
-    // 纯文本回复不自动写入（避免打扰），用户可点击“接受”手动应用
-    if (!hasCode) return;
     try {
       await performApply(record);
       record.applied = true;
