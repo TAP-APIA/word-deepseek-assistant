@@ -31,6 +31,7 @@
   let latestEdit = null; // 最新回复的修改记录 { insertedText, replacedText, applied, bubbleEl, isLatest }
   let editLog = []; // 更早回复的已应用修改记录（按应用顺序）
   let pendingRollback = null; // 待回退的记录（确认弹窗）
+  let editSeq = 0; // 用于生成唯一的书签名/定位标记
   const MAX_EDITS = 20; // 内存中保留的存档点数上限
   let currentConvId = null;
   let conversations = loadHistory();
@@ -124,8 +125,53 @@
     return html;
   }
 
+  // 仅在贴近底部时跟随最新内容；用户已上滑阅读时不打断其位置
+  function smartScrollToBottom(el) {
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 64) return;
+    el.scrollTop = el.scrollHeight;
+  }
+
   function scrollToBottom() {
-    els.messages.scrollTop = els.messages.scrollHeight;
+    smartScrollToBottom(els.messages);
+  }
+
+  // 流式更新气泡内容：原地更新“思考过程”与正文，不重建 DOM，
+  // 这样思考过程中的滚动条可以正常拖拽，且折叠/展开状态不会被重置
+  function renderStreamingBubble(bubble, reasoning, content) {
+    const typing = bubble.querySelector('.typing');
+    if (typing) typing.remove();
+
+    let details = bubble.querySelector('.reasoning');
+    if (reasoning) {
+      if (!details) {
+        details = document.createElement('details');
+        details.className = 'reasoning';
+        details.open = true;
+        const summary = document.createElement('summary');
+        summary.textContent = '思考过程';
+        const body = document.createElement('div');
+        body.className = 'reasoning-body';
+        details.appendChild(summary);
+        details.appendChild(body);
+        bubble.insertBefore(details, bubble.firstChild);
+      }
+      const bodyEl = details.querySelector('.reasoning-body');
+      bodyEl.innerHTML = formatMessage(reasoning);
+      smartScrollToBottom(bodyEl);
+    } else if (details) {
+      details.remove();
+    }
+
+    let contentEl = bubble.querySelector('.msg-content');
+    if (!contentEl) {
+      contentEl = document.createElement('div');
+      contentEl.className = 'msg-content';
+      bubble.appendChild(contentEl);
+    }
+    const formatted = formatMessage(content);
+    contentEl.innerHTML = formatted || '';
+    if (!formatted && !reasoning) contentEl.innerHTML = '（空）';
   }
 
   function renderWelcome() {
@@ -416,22 +462,94 @@
     return blocks.length ? blocks.join('\n\n') : null;
   }
 
+  function bookmarksSupported(context) {
+    return (
+      typeof context.document.bookmarks !== 'undefined' &&
+      typeof context.document.bookmarks.add === 'function' &&
+      typeof context.document.bookmarks.getItemOrNullObject === 'function'
+    );
+  }
+
+  const MARKER_SEARCH_OPTS = {
+    matchCase: true,
+    matchWholeWord: false,
+    ignorePunct: false,
+    ignoreSpace: false,
+  };
+
+  // 生成只在本次写入中存在的唯一定位标记（PUA 字符 + 随机串，几乎不可能与正文冲突）
+  function makeMarker() {
+    return (
+      '\uE000DSINS' + Date.now().toString(36) + '_' + (++editSeq) + '_' +
+      Math.random().toString(36).slice(2, 8) + '\uE001'
+    );
+  }
+
   async function performApply(rec) {
     await Word.run(async (context) => {
       const selRange = context.document.getSelection().getRange();
       context.load(selRange, 'text');
       await context.sync();
       const replacedText = (selRange.text || '').trim();
+      rec.replacedText = replacedText;
+
+      if (!bookmarksSupported(context)) {
+        // 旧版 Word 不支持书签：退化为整文快照（文档很长时会较慢，但保证兼容）
+        const before = context.document.body.getOoxml();
+        await context.sync();
+        rec.beforeOoxml = before.value;
+        if (replacedText.length > 0) {
+          selRange.insertText(rec.insertedText, Word.InsertLocation.replace);
+        } else {
+          selRange.insertText(rec.insertedText, Word.InsertLocation.after);
+        }
+        await context.sync();
+        const after = context.document.body.getOoxml();
+        await context.sync();
+        rec.afterOoxml = after.value;
+        return;
+      }
+
+      // 1) 只保存被替换内容（选区级 OOXML，体积与文档长度无关），并把选区清空成插入点
       if (replacedText.length > 0) {
-        selRange.insertText(rec.insertedText, Word.InsertLocation.replace);
+        const before = selRange.getOoxml();
+        selRange.delete();
+        await context.sync();
+        rec.beforeOoxml = before.value;
       } else {
-        selRange.insertText(rec.insertedText, Word.InsertLocation.after);
+        rec.beforeOoxml = null;
+      }
+
+      // 2) 在插入点放唯一标记，用书签圈住标记，再在书签末尾写入真实文本
+      //    （Word 的“end”插入发生在书签范围内，书签会保留并扩展覆盖新内容）
+      const marker = makeMarker();
+      selRange.insertText(marker, Word.InsertLocation.after);
+      await context.sync();
+      const hits = context.document.body.search(marker, MARKER_SEARCH_OPTS);
+      context.load(hits, 'text');
+      await context.sync();
+      if (!hits.items || !hits.items.length) {
+        throw new Error('无法定位插入位置，请重试');
+      }
+      const hitRange = hits.items[0];
+      const bmName = 'DS_EDIT_' + Date.now().toString(36) + '_' + editSeq;
+      const newBm = context.document.bookmarks.add(bmName, hitRange);
+      newBm.getRange().insertText(rec.insertedText, Word.InsertLocation.end);
+      await context.sync();
+
+      // 3) 删除标记（书签已扩展覆盖真实文本，删除标记不会影响书签）
+      const hits2 = context.document.body.search(marker, MARKER_SEARCH_OPTS);
+      context.load(hits2, 'text');
+      await context.sync();
+      if (hits2.items && hits2.items.length) {
+        hits2.items[0].delete();
       }
       await context.sync();
-      rec.replacedText = replacedText;
+      rec.bookmarkName = bmName;
     });
   }
 
+  // 兜底方案：整文 OOXML 快照（仅在不支持书签的旧版 Word 使用）
   async function getBodyOoxml() {
     return Word.run(async (context) => {
       const result = context.document.body.getOoxml();
@@ -445,6 +563,97 @@
       context.document.body.insertOoxml(ooxml, Word.InsertLocation.replace);
       await context.sync();
     });
+  }
+
+  // 将一次修改恢复到应用前的状态（只操作书签标记的局部范围，与文档长度无关）
+  async function restoreEdit(rec, keepBookmark) {
+    if (!rec.bookmarkName) {
+      if (!rec.beforeOoxml) throw new Error('没有存档点，无法撤销');
+      await restoreBodyOoxml(rec.beforeOoxml);
+      return;
+    }
+    await Word.run(async (context) => {
+      const bm = context.document.bookmarks.getItemOrNullObject(rec.bookmarkName);
+      await context.sync();
+      if (bm.isNullObject) throw new Error('修改标记已丢失（文档可能已被改动），无法撤销');
+      const bmRange = bm.getRange();
+      if (keepBookmark) {
+        // 撤销后仍要能“接受”：内容操作可能连带删除书签，若被删则在原区域重建
+        if (rec.beforeOoxml) {
+          bmRange.insertOoxml(rec.beforeOoxml, Word.InsertLocation.replace);
+        } else {
+          bmRange.delete();
+        }
+        await context.sync();
+        const bm2 = context.document.bookmarks.getItemOrNullObject(rec.bookmarkName);
+        await context.sync();
+        if (bm2.isNullObject) {
+          context.document.bookmarks.add(rec.bookmarkName, bmRange);
+          await context.sync();
+        }
+      } else {
+        // 记录被丢弃（回退等）：先删书签，再恢复内容
+        bm.delete();
+        if (rec.beforeOoxml) {
+          bmRange.insertOoxml(rec.beforeOoxml, Word.InsertLocation.replace);
+        } else {
+          bmRange.delete();
+        }
+        await context.sync();
+      }
+    });
+  }
+
+  // 重新应用：清空书签当前位置的内容，再按与首次写入相同的流程写入真实文本
+  // （不改变 beforeOoxml 存档，因此之后仍可撤销）
+  async function applyTextToBookmark(rec) {
+    await Word.run(async (context) => {
+      const bm = context.document.bookmarks.getItemOrNullObject(rec.bookmarkName);
+      await context.sync();
+      if (bm.isNullObject) throw new Error('修改标记已丢失（文档可能已被改动），无法应用');
+      const bmRange = bm.getRange();
+      // 先删书签再清空内容，避免内容操作连带删除书签
+      bm.delete();
+      bmRange.delete();
+      await context.sync();
+
+      const marker = makeMarker();
+      bmRange.insertText(marker, Word.InsertLocation.after);
+      await context.sync();
+      const hits = context.document.body.search(marker, MARKER_SEARCH_OPTS);
+      context.load(hits, 'text');
+      await context.sync();
+      if (!hits.items || !hits.items.length) {
+        throw new Error('无法定位插入位置，请重试');
+      }
+      const hitRange = hits.items[0];
+      const newBm = context.document.bookmarks.add(rec.bookmarkName, hitRange);
+      newBm.getRange().insertText(rec.insertedText, Word.InsertLocation.end);
+      await context.sync();
+
+      const hits2 = context.document.body.search(marker, MARKER_SEARCH_OPTS);
+      context.load(hits2, 'text');
+      await context.sync();
+      if (hits2.items && hits2.items.length) {
+        hits2.items[0].delete();
+      }
+      await context.sync();
+    });
+  }
+
+  // 记录被丢弃时清理文档中的书签（防止长期累积）
+  async function deleteBookmark(rec) {
+    if (!rec || !rec.bookmarkName || !inOffice()) return;
+    try {
+      await Word.run(async (context) => {
+        const bm = context.document.bookmarks.getItemOrNullObject(rec.bookmarkName);
+        await context.sync();
+        if (!bm.isNullObject) bm.delete();
+        await context.sync();
+      });
+    } catch (err) {
+      console.warn('清理书签失败：', err);
+    }
   }
 
   function appendToggleButton(bubble, record) {
@@ -494,18 +703,21 @@
       return;
     }
     try {
-      const isReapply = !!record.afterOoxml;
-      if (record.afterOoxml) {
-        // 已有应用后的存档：直接整文恢复到该次修改应用后的状态
+      const isReapply = record.hadApplied && !record.applied;
+      if (record.bookmarkName) {
+        // 书签标记了该次修改影响的区域：只在该区域重新写入，速度快且不动文档其他部分
+        await applyTextToBookmark(record);
+      } else if (record.afterOoxml) {
+        // 旧版兼容：整文恢复
         await restoreBodyOoxml(record.afterOoxml);
       } else {
-        record.beforeOoxml = await getBodyOoxml();
+        // 首次应用（例如自动应用失败后手动点击“接受”）
         await performApply(record);
-        record.afterOoxml = await getBodyOoxml();
       }
       record.applied = true;
+      record.hadApplied = true;
       if (!record.isLatest) editLog.push(record);
-      if (editLog.length > MAX_EDITS) editLog.shift();
+      if (editLog.length > MAX_EDITS) deleteBookmark(editLog.shift());
       updateButtonFor(record);
       toast(isReapply ? '已重新应用到文档' : '已应用到文档');
     } catch (err) {
@@ -524,16 +736,18 @@
       if (latestEdit.applied) {
         latestEdit.isLatest = false;
         editLog.push(latestEdit);
-        if (editLog.length > MAX_EDITS) editLog.shift();
+        if (editLog.length > MAX_EDITS) deleteBookmark(editLog.shift());
       } else {
         const wrap = latestEdit.bubbleEl ? latestEdit.bubbleEl.querySelector('.reply-actions') : null;
         if (wrap) wrap.remove();
+        deleteBookmark(latestEdit);
       }
     }
     const record = {
       insertedText: normalizeText(extracted),
       replacedText: '',
       applied: false,
+      hadApplied: false,
       bubbleEl: bubble,
       isLatest: true,
       replyContent: text,
@@ -542,10 +756,9 @@
     appendToggleButton(bubble, record);
     if (!inOffice()) return;
     try {
-      record.beforeOoxml = await getBodyOoxml();
       await performApply(record);
-      record.afterOoxml = await getBodyOoxml();
       record.applied = true;
+      record.hadApplied = true;
       updateButtonFor(record);
     } catch (err) {
       toast('自动应用失败：' + err.message, true);
@@ -559,12 +772,12 @@
       toast('当前不在 Word 中运行，无法撤销', true);
       return;
     }
-    if (!rec.beforeOoxml) {
+    if (!rec.beforeOoxml && !rec.bookmarkName) {
       toast('没有存档点，无法撤销', true);
       return;
     }
     try {
-      await restoreBodyOoxml(rec.beforeOoxml);
+      await restoreEdit(rec, true);
       rec.applied = false;
       updateButtonFor(rec);
       toast('已撤销，可点击“接受”重新应用');
@@ -576,12 +789,16 @@
   async function rollbackTo(record) {
     const idx = editLog.indexOf(record);
     if (idx < 0) return;
-    if (!record.beforeOoxml) {
-      toast('没有该回复的存档点，无法回退', true);
-      return;
-    }
     try {
-      await restoreBodyOoxml(record.beforeOoxml);
+      // 先逆序撤销该回复之后的全部修改（这些记录将被丢弃，顺带删除其书签），
+      // 再撤销该回复本身（保留书签，便于之后点“接受”重新应用）
+      for (let i = editLog.length - 1; i > idx; i--) {
+        await restoreEdit(editLog[i], false);
+      }
+      if (latestEdit && latestEdit.applied && latestEdit !== record) {
+        await restoreEdit(latestEdit, false);
+      }
+      await restoreEdit(record, true);
       // 删除该回复之后的对话记录与气泡
       const keepIdx = conversation.findIndex(
         (m) => m.role === 'assistant' && record.replyContent && m.content === record.replyContent
@@ -693,7 +910,7 @@
             if (rdelta || delta) {
               if (rdelta) lastReasoningText += rdelta;
               if (delta) lastAssistantText += delta;
-              bubble.innerHTML = renderAssistantHtml(lastReasoningText, lastAssistantText);
+              renderStreamingBubble(bubble, lastReasoningText, lastAssistantText);
               scrollToBottom();
             }
           } catch {
@@ -706,7 +923,8 @@
     if (!lastAssistantText && !lastReasoningText) {
       throw new Error('未收到模型回复');
     }
-    bubble.innerHTML = renderAssistantHtml(lastReasoningText, lastAssistantText);
+    renderStreamingBubble(bubble, lastReasoningText, lastAssistantText);
+    scrollToBottom();
   }
 
   async function handleSend() {
@@ -776,6 +994,8 @@
     lastReasoningText = '';
     currentConvId = null;
     els.messages.innerHTML = '';
+    if (latestEdit) deleteBookmark(latestEdit);
+    for (const rec of editLog) deleteBookmark(rec);
     latestEdit = null;
     editLog = [];
     pendingRollback = null;
