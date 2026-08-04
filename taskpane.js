@@ -633,7 +633,7 @@
           ],
           stream: true,
           reasoning_effort: reasoningEffort,
-          max_tokens: 8192,
+          max_tokens: 16384,
         }),
       });
     } catch (err) {
@@ -679,30 +679,36 @@
       while ((sep = buf.indexOf('\n\n')) >= 0) {
         const raw = buf.slice(0, sep);
         buf = buf.slice(sep + 2);
-        for (const line of raw.split('\n')) {
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (data === '[DONE]') continue;
-          try {
-            const j = JSON.parse(data);
-            const d = j.choices && j.choices[0] ? j.choices[0].delta || {} : {};
-            const delta = d.content || '';
-            const rdelta = d.reasoning_content || '';
-            if (rdelta || delta) {
-              if (rdelta) reasoning += rdelta;
-              if (delta) content += delta;
-              renderStreamingBubble(bubble, reasoning, content);
-              scrollToBottom();
-            }
-          } catch {
-            /* 忽略无法解析的片段 */
-          }
-        }
+        parseSseBlock(raw);
       }
     }
+    // 处理缓冲区尾部可能残留的未闭合 SSE 数据块
+    if (buf.trim()) parseSseBlock(buf);
     renderStreamingBubble(bubble, reasoning, content);
     scrollToBottom();
     return { reasoning, content, aborted: !!(signal && signal.aborted) };
+
+    function parseSseBlock(raw) {
+      for (const line of raw.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const j = JSON.parse(data);
+          const d = j.choices && j.choices[0] ? j.choices[0].delta || {} : {};
+          const delta = d.content || '';
+          const rdelta = d.reasoning_content || '';
+          if (rdelta || delta) {
+            if (rdelta) reasoning += rdelta;
+            if (delta) content += delta;
+            renderStreamingBubble(bubble, reasoning, content);
+            scrollToBottom();
+          }
+        } catch {
+          /* 忽略无法解析的片段 */
+        }
+      }
+    }
   }
 
   // 把 AI 生成的格式方案应用到 Word：遍历段落，按规则匹配并设置格式
@@ -777,7 +783,11 @@
         return { ok: false, error: '已中断', aborted: true, content: out.content, reasoning: out.reasoning };
       }
       if (!out.content.trim()) {
-        throw new Error('AI 未返回格式方案内容');
+        throw new Error(
+          out.reasoning && out.reasoning.trim()
+            ? 'AI 思考过长，输出被截断（未生成排版方案）。请在设置中降低思考强度后重试，或换用更快模型。'
+            : 'AI 未返回格式方案内容'
+        );
       }
       let plan;
       try {
