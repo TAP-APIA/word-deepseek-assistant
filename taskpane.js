@@ -41,6 +41,8 @@
   let reasoningEffort = localStorage.getItem('ds_reasoning_effort') || 'high';
   let conversation = [];
   let streaming = false;
+  let abortController = null; // 用于中断当前流式请求
+  let beautifying = false; // 防止重复触发格式美化
   let lastAssistantText = '';
   let lastReasoningText = '';
   let latestEdit = null; // 最新回复的修改记录 { insertedText, replacedText, applied, bubbleEl, isLatest }
@@ -627,7 +629,7 @@
         ],
         stream: false,
         reasoning_effort: reasoningEffort,
-        max_tokens: 2048,
+        max_tokens: 8192,
       }),
     });
     if (!res.ok) {
@@ -641,7 +643,13 @@
       throw new Error(detail || `请求失败（HTTP ${res.status}）`);
     }
     const j = await res.json();
-    return extractJson(j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content);
+    const content = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    if (!content) throw new Error('AI 未返回格式方案内容');
+    try {
+      return extractJson(content);
+    } catch (err) {
+      throw new Error('无法解析 AI 返回的排版方案：' + (err && err.message ? err.message : String(err)));
+    }
   }
 
   // 把 AI 生成的格式方案应用到 Word：遍历段落，按规则匹配并设置格式
@@ -694,30 +702,31 @@
   async function beautifyDocument() {
     if (typeof Word === 'undefined') {
       toast('Word API 未加载，无法美化格式', true);
-      return false;
+      return { ok: false, error: 'Word API 未加载' };
     }
     if (!apiKey || !model) {
       toast('请先在设置中填写 API Key 并选择模型', true);
       openSettings();
-      return false;
+      return { ok: false, error: '未填写 API Key 或未选择模型' };
     }
     try {
       setStatus('正在读取文档并分析格式…');
       const docText = await readFullDocText();
       if (!docText) {
         toast('文档为空，无需美化', true);
-        return false;
+        return { ok: false, error: '文档为空' };
       }
       setStatus('AI 正在分析文档结构并生成排版方案…');
       const plan = await fetchFormatPlan(docText);
       await applyFormatPlan(plan);
       setStatus('');
       toast('已按 AI 方案完成排版');
-      return true;
+      return { ok: true, error: '' };
     } catch (err) {
       setStatus('');
-      toast('美化格式失败：' + (err && err.message ? err.message : String(err)), true);
-      return false;
+      const msg = err && err.message ? err.message : String(err);
+      toast('美化格式失败：' + msg, true);
+      return { ok: false, error: msg };
     }
   }
 
@@ -1134,7 +1143,7 @@
 
   /* ---------- 对话逻辑 ---------- */
 
-  async function streamChat(bubble) {
+  async function streamChat(bubble, signal) {
     lastAssistantText = '';
     lastReasoningText = '';
     let res;
@@ -1145,6 +1154,7 @@
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
+        signal,
         body: JSON.stringify({
           model,
           messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...conversation],
@@ -1154,10 +1164,12 @@
         }),
       });
     } catch (err) {
+      if (signal && signal.aborted) return; // 用户主动中断
       throw new Error('无法连接 DeepSeek，请检查网络（' + err.message + '）');
     }
 
     if (!res.ok) {
+      if (signal && signal.aborted) return;
       let detail = '';
       try {
         const j = await res.json();
@@ -1184,9 +1196,15 @@
     let buf = '';
 
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        if (signal && signal.aborted) break; // 中断时保留已生成内容
+        throw err;
+      }
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
 
       let sep;
       while ((sep = buf.indexOf('\n\n')) >= 0) {
@@ -1214,7 +1232,7 @@
       }
     }
 
-    if (!lastAssistantText && !lastReasoningText) {
+    if (!lastAssistantText && !lastReasoningText && !(signal && signal.aborted)) {
       throw new Error('未收到模型回复');
     }
     renderStreamingBubble(bubble, lastReasoningText, lastAssistantText);
@@ -1223,7 +1241,7 @@
 
   async function handleSend() {
     const text = els.userInput.value.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || beautifying) return;
     if (!apiKey) {
       toast('请先在设置中填写 DeepSeek API Key', true);
       openSettings();
@@ -1239,30 +1257,42 @@
     if (/(美化格式|美化排版|格式调整|调整格式|排版|标题居中|行距|缩进|格式好看|让格式)/.test(text)) {
       addMessage('user', text);
       els.userInput.value = '';
-      const ok = await beautifyDocument();
-      addMessage(
-        'assistant',
-        ok
-          ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
-          : '格式美化未完成，请检查 Word 连接后重试。'
-      );
-      conversation.push({ role: 'user', content: text });
-      conversation.push({
-        role: 'assistant',
-        content: ok
-          ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
-          : '格式美化未完成，请检查 Word 连接后重试。',
-      });
-      if (conversation.length > MAX_HISTORY * 2) {
-        conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
+      beautifying = true;
+      els.sendBtn.disabled = true;
+      els.sendBtn.textContent = '排版中';
+      try {
+        const result = await beautifyDocument();
+        const ok = result.ok;
+        addMessage(
+          'assistant',
+          ok
+            ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
+            : '格式美化未完成：' + (result.error || '请检查 Word 连接后重试。')
+        );
+        conversation.push({ role: 'user', content: text });
+        conversation.push({
+          role: 'assistant',
+          content: ok
+            ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
+            : '格式美化未完成：' + (result.error || '请检查 Word 连接后重试。'),
+        });
+        if (conversation.length > MAX_HISTORY * 2) {
+          conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
+        }
+        saveCurrentConversation();
+      } finally {
+        beautifying = false;
+        els.sendBtn.disabled = false;
+        els.sendBtn.textContent = '发送';
       }
-      saveCurrentConversation();
       return;
     }
 
     streaming = true;
-    els.sendBtn.disabled = true;
-    els.sendBtn.textContent = '生成中';
+    abortController = new AbortController();
+    els.sendBtn.disabled = false;
+    els.sendBtn.textContent = '中断';
+    els.sendBtn.title = '点击中断当前思考';
     els.userInput.value = '';
 
     addMessage('user', text);
@@ -1286,14 +1316,29 @@
 
     const bubble = addMessage('assistant', '', true);
     try {
-      await streamChat(bubble);
-      conversation.push({ role: 'assistant', content: lastAssistantText, reasoning: lastReasoningText });
+      await streamChat(bubble, abortController.signal);
+      const wasAborted = !!(abortController && abortController.signal.aborted);
+      if (wasAborted) {
+        if (!lastAssistantText && !lastReasoningText) {
+          // 尚未收到任何内容就中断：把占位气泡改为提示
+          bubble.classList.remove('typing');
+          bubble.innerHTML = '已中断生成';
+        } else {
+          renderStreamingBubble(bubble, lastReasoningText, lastAssistantText);
+          setStatus('已中断，保留已生成的部分回复');
+        }
+      }
+      if (lastAssistantText || lastReasoningText) {
+        conversation.push({ role: 'assistant', content: lastAssistantText, reasoning: lastReasoningText });
+      }
       // 控制历史长度
       if (conversation.length > MAX_HISTORY * 2) {
         conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
       }
       saveCurrentConversation();
-      await autoApplyReply(bubble);
+      if (!wasAborted) {
+        await autoApplyReply(bubble);
+      }
     } catch (err) {
       bubble.classList.add('error');
       bubble.innerHTML = '请求失败：' + escapeHtml(err.message || String(err));
@@ -1301,8 +1346,10 @@
     }
 
     streaming = false;
+    abortController = null;
     els.sendBtn.disabled = false;
     els.sendBtn.textContent = '发送';
+    els.sendBtn.title = '发送消息';
     els.userInput.focus();
   }
 
@@ -1436,7 +1483,17 @@
   /* ---------- 初始化 ---------- */
 
   function bind() {
-    els.sendBtn.addEventListener('click', handleSend);
+    els.sendBtn.addEventListener('click', () => {
+      if (streaming) {
+        // 生成中：点击即中断当前思考
+        if (abortController) abortController.abort();
+        els.sendBtn.disabled = true;
+        els.sendBtn.textContent = '已请求中断';
+        setStatus('正在中断…');
+      } else {
+        handleSend();
+      }
+    });
     els.userInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
@@ -1445,7 +1502,20 @@
     });
     els.newChatBtn.addEventListener('click', newChat);
     els.settingsBtn.addEventListener('click', openSettings);
-    els.beautifyBtn.addEventListener('click', beautifyDocument);
+    els.beautifyBtn.addEventListener('click', () => {
+      if (streaming || beautifying) {
+        toast('当前正在处理，请稍候', true);
+        return;
+      }
+      beautifying = true;
+      els.beautifyBtn.disabled = true;
+      beautifyDocument().then((result) => {
+        if (!result.ok) toast('美化格式失败：' + result.error, true);
+      }).finally(() => {
+        beautifying = false;
+        els.beautifyBtn.disabled = false;
+      });
+    });
     els.fetchModelsBtn.addEventListener('click', fetchModels);
     els.customModelInput.addEventListener('input', () => {
       els.saveSettingsBtn.disabled = !els.customModelInput.value.trim() && !els.modelSelect.value;
