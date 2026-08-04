@@ -637,7 +637,9 @@
             },
           ],
           stream: true,
-          reasoning_effort: reasoningEffort,
+          // 排版请求强制使用低思考强度：思考过短即可完成结构分析，
+          // 避免长思考耗尽输出额度导致排版方案被截断
+          reasoning_effort: 'low',
           max_tokens: 16384,
         }),
       });
