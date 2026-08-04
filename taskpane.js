@@ -597,41 +597,49 @@
     return JSON.parse(candidate.slice(start, end + 1));
   }
 
-  // 调用 DeepSeek 分析文档结构并生成格式方案（非流式，只解析 JSON）
-  async function fetchFormatPlan(docText) {
-    const res = await fetch(DEEPSEEK_API, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              '你是 Word 文档排版专家。用户会给你一份文档全文，请你分析它的结构（标题、章节、条款、正文等层级），' +
-              '并输出一个 JSON 格式方案用于 Word 排版，不要输出任何其他文字或 Markdown 代码块。' +
-              'JSON 结构：{"default":{...默认段落格式...},"rules":[{"name":"说明","match":{"regex":"正则"},"format":{...}}]}。' +
-              'match.regex 是 JavaScript 正则字符串（反斜杠需双写），插件会按顺序匹配文档每个段落，命中即应用对应 format；' +
-              'format 字段可省略，省略表示继承 default。' +
-              '可用 format 字段：fontName(西文字体)、fontNameFarEast(中文字体)、size(字号)、bold、italic、' +
-              'align(left/center/right/justify)、lineSpacingRule(single/oneAndHalf/double)、' +
-              'spaceBefore、spaceAfter(磅)、firstLineIndent、leftIndent(磅，负数为悬挂缩进)。',
-          },
-          {
-            role: 'user',
-            content:
-              '请为以下文档生成适合其结构的格式方案。注意识别文档实际使用的标题与条款层级，不要套用固定模板。\n\n' +
-              docText.slice(0, 80000),
-          },
-        ],
-        stream: false,
-        reasoning_effort: reasoningEffort,
-        max_tokens: 8192,
-      }),
-    });
+  const FORMAT_SYSTEM_PROMPT =
+    '你是 Word 文档排版专家。用户会给你一份文档全文，请你分析它的结构（标题、章节、条款、正文等层级），' +
+    '并输出一个 JSON 格式方案用于 Word 排版，不要输出任何其他文字或 Markdown 代码块。' +
+    'JSON 结构：{"default":{...默认段落格式...},"rules":[{"name":"说明","match":{"regex":"正则"},"format":{...}}]}。' +
+    'match.regex 是 JavaScript 正则字符串（反斜杠需双写），插件会按顺序匹配文档每个段落，命中即应用对应 format；' +
+    'format 字段可省略，省略表示继承 default。' +
+    '可用 format 字段：fontName(西文字体)、fontNameFarEast(中文字体)、size(字号)、bold、italic、' +
+    'align(left/center/right/justify)、lineSpacingRule(single/oneAndHalf/double)、' +
+    'spaceBefore、spaceAfter(磅)、firstLineIndent、leftIndent(磅，负数为悬挂缩进)。';
+
+  // 流式请求排版方案：边生成边把“思考过程”和 JSON 内容渲染到气泡，支持中断
+  async function streamFormatPlan(bubble, docText, signal) {
+    let reasoning = '';
+    let content = '';
+    let res;
+    try {
+      res = await fetch(DEEPSEEK_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        signal,
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: FORMAT_SYSTEM_PROMPT },
+            {
+              role: 'user',
+              content:
+                '请为以下文档生成适合其结构的格式方案。注意识别文档实际使用的标题与条款层级，不要套用固定模板。\n\n' +
+                docText.slice(0, 80000),
+            },
+          ],
+          stream: true,
+          reasoning_effort: reasoningEffort,
+          max_tokens: 8192,
+        }),
+      });
+    } catch (err) {
+      if (signal && signal.aborted) return { reasoning, content, aborted: true };
+      throw err;
+    }
     if (!res.ok) {
       let detail = '';
       try {
@@ -640,16 +648,61 @@
       } catch {
         detail = await res.text();
       }
+      if (res.status === 401) throw new Error('API Key 无效或未填写（401），请在设置中检查');
+      if (res.status === 402) throw new Error('DeepSeek 账户余额不足（402），请前往平台充值');
+      if (res.status === 429) throw new Error('请求过于频繁（429），请稍后再试');
       throw new Error(detail || `请求失败（HTTP ${res.status}）`);
     }
-    const j = await res.json();
-    const content = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-    if (!content) throw new Error('AI 未返回格式方案内容');
-    try {
-      return extractJson(content);
-    } catch (err) {
-      throw new Error('无法解析 AI 返回的排版方案：' + (err && err.message ? err.message : String(err)));
+    if (!res.body) {
+      const j = await res.json();
+      reasoning = (j.choices && j.choices[0] && j.choices[0].message.reasoning_content) || '';
+      content = (j.choices && j.choices[0] && j.choices[0].message.content) || '';
+      renderStreamingBubble(bubble, reasoning, content);
+      return { reasoning, content, aborted: false };
     }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buf = '';
+    for (;;) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        if (signal && signal.aborted) break;
+        throw err;
+      }
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+
+      let sep;
+      while ((sep = buf.indexOf('\n\n')) >= 0) {
+        const raw = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        for (const line of raw.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const j = JSON.parse(data);
+            const d = j.choices && j.choices[0] ? j.choices[0].delta || {} : {};
+            const delta = d.content || '';
+            const rdelta = d.reasoning_content || '';
+            if (rdelta || delta) {
+              if (rdelta) reasoning += rdelta;
+              if (delta) content += delta;
+              renderStreamingBubble(bubble, reasoning, content);
+              scrollToBottom();
+            }
+          } catch {
+            /* 忽略无法解析的片段 */
+          }
+        }
+      }
+    }
+    renderStreamingBubble(bubble, reasoning, content);
+    scrollToBottom();
+    return { reasoning, content, aborted: !!(signal && signal.aborted) };
   }
 
   // 把 AI 生成的格式方案应用到 Word：遍历段落，按规则匹配并设置格式
@@ -698,8 +751,8 @@
     });
   }
 
-  // 美化格式主流程：读取全文 → AI 分析生成方案 → 应用到文档
-  async function beautifyDocument() {
+  // 美化格式主流程：读取全文 → AI 流式分析生成方案（可中断、可看思考）→ 应用到文档
+  async function beautifyDocument(bubble, signal) {
     if (typeof Word === 'undefined') {
       toast('Word API 未加载，无法美化格式', true);
       return { ok: false, error: 'Word API 未加载' };
@@ -717,16 +770,34 @@
         return { ok: false, error: '文档为空' };
       }
       setStatus('AI 正在分析文档结构并生成排版方案…');
-      const plan = await fetchFormatPlan(docText);
+      const out = await streamFormatPlan(bubble, docText, signal);
+      if (out.aborted) {
+        setStatus('');
+        toast('排版已中断');
+        return { ok: false, error: '已中断', aborted: true, content: out.content, reasoning: out.reasoning };
+      }
+      if (!out.content.trim()) {
+        throw new Error('AI 未返回格式方案内容');
+      }
+      let plan;
+      try {
+        plan = extractJson(out.content);
+      } catch (err) {
+        throw new Error('无法解析 AI 返回的排版方案：' + (err && err.message ? err.message : String(err)));
+      }
       await applyFormatPlan(plan);
       setStatus('');
       toast('已按 AI 方案完成排版');
-      return { ok: true, error: '' };
+      return { ok: true, error: '', content: out.content, reasoning: out.reasoning };
     } catch (err) {
       setStatus('');
+      if (signal && signal.aborted) {
+        toast('排版已中断');
+        return { ok: false, error: '已中断', aborted: true, content: '', reasoning: '' };
+      }
       const msg = err && err.message ? err.message : String(err);
       toast('美化格式失败：' + msg, true);
-      return { ok: false, error: msg };
+      return { ok: false, error: msg, aborted: false, content: '', reasoning: '' };
     }
   }
 
@@ -1258,23 +1329,38 @@
       addMessage('user', text);
       els.userInput.value = '';
       beautifying = true;
-      els.sendBtn.disabled = true;
-      els.sendBtn.textContent = '排版中';
+      streaming = true;
+      abortController = new AbortController();
+      els.sendBtn.disabled = false;
+      els.sendBtn.textContent = '中断';
+      els.sendBtn.title = '点击中断当前排版';
+      const bubble = addMessage('assistant', '', true);
       try {
-        const result = await beautifyDocument();
+        const result = await beautifyDocument(bubble, abortController.signal);
         const ok = result.ok;
-        addMessage(
-          'assistant',
-          ok
-            ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
-            : '格式美化未完成：' + (result.error || '请检查 Word 连接后重试。')
-        );
+        if (!ok && result.aborted) {
+          bubble.classList.remove('typing');
+          if (!result.content && !result.reasoning) {
+            bubble.innerHTML = '排版已中断';
+          } else {
+            renderStreamingBubble(bubble, result.reasoning || '', result.content || '');
+          }
+        } else if (!ok) {
+          bubble.classList.remove('typing');
+          bubble.classList.add('error');
+          bubble.innerHTML = '排版失败：' + escapeHtml(result.error || '未知错误');
+        } else {
+          // 流式气泡已包含思考与方案；补齐一句结果说明
+          const note = document.createElement('div');
+          note.className = 'status-line';
+          note.textContent = '已按 AI 方案完成排版';
+          bubble.appendChild(note);
+        }
         conversation.push({ role: 'user', content: text });
         conversation.push({
           role: 'assistant',
-          content: ok
-            ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
-            : '格式美化未完成：' + (result.error || '请检查 Word 连接后重试。'),
+          content: result.content || (ok ? '已按 AI 方案完成排版' : ''),
+          reasoning: result.reasoning || '',
         });
         if (conversation.length > MAX_HISTORY * 2) {
           conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
@@ -1282,8 +1368,11 @@
         saveCurrentConversation();
       } finally {
         beautifying = false;
+        streaming = false;
+        abortController = null;
         els.sendBtn.disabled = false;
         els.sendBtn.textContent = '发送';
+        els.sendBtn.title = '发送消息';
       }
       return;
     }
@@ -1508,12 +1597,39 @@
         return;
       }
       beautifying = true;
+      streaming = true;
+      abortController = new AbortController();
       els.beautifyBtn.disabled = true;
-      beautifyDocument().then((result) => {
-        if (!result.ok) toast('美化格式失败：' + result.error, true);
+      els.sendBtn.disabled = false;
+      els.sendBtn.textContent = '中断';
+      els.sendBtn.title = '点击中断当前排版';
+      const bubble = addMessage('assistant', '', true);
+      beautifyDocument(bubble, abortController.signal).then((result) => {
+        if (result.aborted) {
+          bubble.classList.remove('typing');
+          if (!result.content && !result.reasoning) {
+            bubble.innerHTML = '排版已中断';
+          } else {
+            renderStreamingBubble(bubble, result.reasoning || '', result.content || '');
+          }
+        } else if (!result.ok) {
+          bubble.classList.remove('typing');
+          bubble.classList.add('error');
+          bubble.innerHTML = '排版失败：' + escapeHtml(result.error || '未知错误');
+        } else {
+          const note = document.createElement('div');
+          note.className = 'status-line';
+          note.textContent = '已按 AI 方案完成排版';
+          bubble.appendChild(note);
+        }
       }).finally(() => {
         beautifying = false;
+        streaming = false;
+        abortController = null;
         els.beautifyBtn.disabled = false;
+        els.sendBtn.disabled = false;
+        els.sendBtn.textContent = '发送';
+        els.sendBtn.title = '发送消息';
       });
     });
     els.fetchModelsBtn.addEventListener('click', fetchModels);
