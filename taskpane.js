@@ -13,7 +13,22 @@
     '1. 只把要插入文档的正文放在 Markdown 代码块（以```开头、以```结尾）中；\n' +
     '2. 代码块外只写修改说明、建议或摘要，不要包含正文；\n' +
     '3. 代码块内只放正文本身，不要使用任何 Markdown 标记；\n' +
-    '4. 如果回复只是回答问题、不需要插入文档，则不要使用代码块。';
+    '4. 如果回复只是回答问题、不需要插入文档，则不要使用代码块。\n' +
+    '5. 当用户要求调整文档格式（美化格式、排版、标题居中、行距、缩进等）时，不要输出建议文字，也不要生成需要插入的正文；' +
+    '只输出一个 JSON 格式方案（不要使用 Markdown 代码块包裹），插件会解析它并直接应用到 Word 文档。\n' +
+    'JSON 格式方案结构如下：\n' +
+    '{\n' +
+    '  "default": {"fontName":"Times New Roman","fontNameFarEast":"宋体","size":11,"align":"justify",' +
+    '"lineSpacingRule":"oneAndHalf","spaceAfter":6,"firstLineIndent":22,"leftIndent":0,"bold":false,"italic":false},\n' +
+    '  "rules": [\n' +
+    '    {"name":"主标题","match":{"regex":"^GNU GENERAL PUBLIC LICENSE$"},"format":{"align":"center","bold":true,"size":16,"spaceAfter":12,"firstLineIndent":0}},\n' +
+    '    {"name":"章节标题","match":{"regex":"^(Preamble|TERMS AND CONDITIONS)$"},"format":{"align":"left","bold":true,"size":14,"spaceBefore":12,"spaceAfter":12,"firstLineIndent":0}},\n' +
+    '    {"name":"条款标题","match":{"regex":"^\\\\d+\\\\.\\\\s+"},"format":{"align":"left","bold":true,"size":12,"spaceBefore":6,"spaceAfter":6,"firstLineIndent":0}},\n' +
+    '    {"name":"子项","match":{"regex":"^[a-z]\\\\)\\\\s"},"format":{"firstLineIndent":-21,"leftIndent":21}}\n' +
+    '  ]\n' +
+    '}\n' +
+    'match.regex 是 JavaScript 正则表达式（注意反斜杠需双写），按顺序匹配文档每个段落，命中即应用该 format；' +
+    'format 字段可省略保持默认；align 取值 left/center/right/justify；lineSpacingRule 取值 single/oneAndHalf/double。';
   const MAX_HISTORY = 20; // 发送给模型的对话轮数上限
   const HISTORY_KEY = 'ds_conversations';
   const MAX_HISTORY_CONV = 20;
@@ -46,6 +61,7 @@
     sendBtn: $('sendBtn'),
     newChatBtn: $('newChatBtn'),
     settingsBtn: $('settingsBtn'),
+    beautifyBtn: $('beautifyBtn'),
     historyBtn: $('historyBtn'),
     historyBackdrop: $('historyBackdrop'),
     historyPanel: $('historyPanel'),
@@ -556,6 +572,153 @@
 
   function normalizeText(t) {
     return t.replace(/\r\n/g, '\r').replace(/\n/g, '\r');
+  }
+
+  // 读取文档全文（用于 AI 分析文档结构）
+  async function readFullDocText() {
+    if (typeof Word === 'undefined') return '';
+    return Word.run(async (context) => {
+      const body = context.document.body;
+      context.load(body, 'text');
+      await context.sync();
+      return (body.text || '').trim();
+    });
+  }
+
+  // 从 AI 回复中提取 JSON（容忍 ```json 代码块或前后多余文字）
+  function extractJson(text) {
+    const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text || '');
+    const candidate = fenced ? fenced[1] : text;
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('回复中未找到 JSON 格式方案');
+    return JSON.parse(candidate.slice(start, end + 1));
+  }
+
+  // 调用 DeepSeek 分析文档结构并生成格式方案（非流式，只解析 JSON）
+  async function fetchFormatPlan(docText) {
+    const res = await fetch(DEEPSEEK_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              '你是 Word 文档排版专家。用户会给你一份文档全文，请你分析它的结构（标题、章节、条款、正文等层级），' +
+              '并输出一个 JSON 格式方案用于 Word 排版，不要输出任何其他文字或 Markdown 代码块。' +
+              'JSON 结构：{"default":{...默认段落格式...},"rules":[{"name":"说明","match":{"regex":"正则"},"format":{...}}]}。' +
+              'match.regex 是 JavaScript 正则字符串（反斜杠需双写），插件会按顺序匹配文档每个段落，命中即应用对应 format；' +
+              'format 字段可省略，省略表示继承 default。' +
+              '可用 format 字段：fontName(西文字体)、fontNameFarEast(中文字体)、size(字号)、bold、italic、' +
+              'align(left/center/right/justify)、lineSpacingRule(single/oneAndHalf/double)、' +
+              'spaceBefore、spaceAfter(磅)、firstLineIndent、leftIndent(磅，负数为悬挂缩进)。',
+          },
+          {
+            role: 'user',
+            content:
+              '请为以下文档生成适合其结构的格式方案。注意识别文档实际使用的标题与条款层级，不要套用固定模板。\n\n' +
+              docText.slice(0, 80000),
+          },
+        ],
+        stream: false,
+        reasoning_effort: reasoningEffort,
+        max_tokens: 2048,
+      }),
+    });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const j = await res.json();
+        detail = (j.error && (j.error.message || j.error)) || JSON.stringify(j);
+      } catch {
+        detail = await res.text();
+      }
+      throw new Error(detail || `请求失败（HTTP ${res.status}）`);
+    }
+    const j = await res.json();
+    return extractJson(j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content);
+  }
+
+  // 把 AI 生成的格式方案应用到 Word：遍历段落，按规则匹配并设置格式
+  async function applyFormatPlan(plan) {
+    const def = plan && plan.default ? plan.default : {};
+    const rules = Array.isArray(plan && plan.rules) ? plan.rules : [];
+    await Word.run(async (context) => {
+      const paras = context.document.body.paragraphs;
+      context.load(paras, 'text');
+      await context.sync();
+
+      paras.items.forEach((p) => {
+        const t = (p.text || '').trim();
+        let fmt = null;
+        for (const r of rules) {
+          if (r && r.match && r.match.regex) {
+            try {
+              if (new RegExp(r.match.regex).test(t)) {
+                fmt = Object.assign({}, def, r.format || {});
+                break;
+              }
+            } catch {
+              /* 忽略无效正则 */
+            }
+          }
+        }
+        if (!fmt) fmt = Object.assign({}, def);
+
+        const f = p.font;
+        const pf = p.paragraphFormat;
+        if (fmt.fontName) f.name = fmt.fontName;
+        if (fmt.fontNameFarEast && typeof f.nameFarEast !== 'undefined') f.nameFarEast = fmt.fontNameFarEast;
+        if (typeof fmt.size === 'number') f.size = fmt.size;
+        if (typeof fmt.bold === 'boolean') f.bold = fmt.bold;
+        if (typeof fmt.italic === 'boolean') f.italic = fmt.italic;
+        if (fmt.align && Word.Alignment[fmt.align] !== undefined) p.alignment = Word.Alignment[fmt.align];
+        if (fmt.lineSpacingRule && Word.LineSpacingRule[fmt.lineSpacingRule] !== undefined) {
+          pf.lineSpacingRule = Word.LineSpacingRule[fmt.lineSpacingRule];
+        }
+        if (typeof fmt.spaceBefore === 'number') pf.spaceBefore = fmt.spaceBefore;
+        if (typeof fmt.spaceAfter === 'number') pf.spaceAfter = fmt.spaceAfter;
+        if (typeof fmt.firstLineIndent === 'number') pf.firstLineIndent = fmt.firstLineIndent;
+        if (typeof fmt.leftIndent === 'number') pf.leftIndent = fmt.leftIndent;
+      });
+      await context.sync();
+    });
+  }
+
+  // 美化格式主流程：读取全文 → AI 分析生成方案 → 应用到文档
+  async function beautifyDocument() {
+    if (typeof Word === 'undefined') {
+      toast('Word API 未加载，无法美化格式', true);
+      return false;
+    }
+    if (!apiKey || !model) {
+      toast('请先在设置中填写 API Key 并选择模型', true);
+      openSettings();
+      return false;
+    }
+    try {
+      setStatus('正在读取文档并分析格式…');
+      const docText = await readFullDocText();
+      if (!docText) {
+        toast('文档为空，无需美化', true);
+        return false;
+      }
+      setStatus('AI 正在分析文档结构并生成排版方案…');
+      const plan = await fetchFormatPlan(docText);
+      await applyFormatPlan(plan);
+      setStatus('');
+      toast('已按 AI 方案完成排版');
+      return true;
+    } catch (err) {
+      setStatus('');
+      toast('美化格式失败：' + (err && err.message ? err.message : String(err)), true);
+      return false;
+    }
   }
 
   function extractInsertText(text) {
@@ -1072,6 +1235,31 @@
       return;
     }
 
+    // 格式美化类指令：插件直接操作 Word 文档，不经过 AI 生成建议文字
+    if (/(美化格式|美化排版|格式调整|调整格式|排版|标题居中|行距|缩进|格式好看|让格式)/.test(text)) {
+      addMessage('user', text);
+      els.userInput.value = '';
+      const ok = await beautifyDocument();
+      addMessage(
+        'assistant',
+        ok
+          ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
+          : '格式美化未完成，请检查 Word 连接后重试。'
+      );
+      conversation.push({ role: 'user', content: text });
+      conversation.push({
+        role: 'assistant',
+        content: ok
+          ? '已读取文档全文，并由 AI 根据文档实际结构生成排版方案后应用到 Word。'
+          : '格式美化未完成，请检查 Word 连接后重试。',
+      });
+      if (conversation.length > MAX_HISTORY * 2) {
+        conversation = conversation.slice(conversation.length - MAX_HISTORY * 2);
+      }
+      saveCurrentConversation();
+      return;
+    }
+
     streaming = true;
     els.sendBtn.disabled = true;
     els.sendBtn.textContent = '生成中';
@@ -1257,6 +1445,7 @@
     });
     els.newChatBtn.addEventListener('click', newChat);
     els.settingsBtn.addEventListener('click', openSettings);
+    els.beautifyBtn.addEventListener('click', beautifyDocument);
     els.fetchModelsBtn.addEventListener('click', fetchModels);
     els.customModelInput.addEventListener('input', () => {
       els.saveSettingsBtn.disabled = !els.customModelInput.value.trim() && !els.modelSelect.value;
