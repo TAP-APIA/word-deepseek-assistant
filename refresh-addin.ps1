@@ -11,18 +11,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 $word = Get-Process -Name WINWORD -ErrorAction SilentlyContinue
 if ($word) {
     Write-Host ""
-    Write-Host "检测到 Word 正在运行。请先保存所有文档。" -ForegroundColor Yellow
-    if ($Auto) {
-        Write-Host "自动模式：关闭 Word 并继续。"
-        $ans = "Y"
-    } else {
-        $ans = Read-Host "是否自动关闭 Word 并继续？(Y/N)"
-    }
-    if ($ans -notmatch "^[Yy]") {
-        Write-Host "已取消。请保存文档后重新运行本脚本。" -ForegroundColor Yellow
-        if (-not $Auto) { Read-Host "按回车退出" }
-        exit 1
-    }
+    Write-Host "检测到 Word 正在运行，直接关闭并继续（不再询问确认）。" -ForegroundColor Yellow
     Write-Host "正在关闭 Word..."
     Stop-Process -Name WINWORD -Force
     Start-Sleep -Seconds 2
