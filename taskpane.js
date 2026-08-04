@@ -36,7 +36,12 @@
   const LEGACY_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
   const FALLBACK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
 
-  let apiKey = localStorage.getItem('ds_api_key') || '';
+  // API Key 只允许可打印 ASCII（sk- 开头的字母数字）；清洗掉复制时混入的
+  // 中文、换行、零宽字符等，避免 fetch 请求头报 "non ISO-8859-1 code point"
+  function sanitizeApiKey(key) {
+    return String(key || '').replace(/[^\x20-\x7E]/g, '').trim();
+  }
+  let apiKey = sanitizeApiKey(localStorage.getItem('ds_api_key'));
   let model = localStorage.getItem('ds_model') || '';
   let reasoningEffort = localStorage.getItem('ds_reasoning_effort') || 'high';
   let conversation = [];
@@ -617,7 +622,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${sanitizeApiKey(apiKey)}`,
         },
         signal,
         body: JSON.stringify({
@@ -1233,7 +1238,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${sanitizeApiKey(apiKey)}`,
         },
         signal,
         body: JSON.stringify({
@@ -1520,7 +1525,7 @@
   }
 
   async function fetchModels() {
-    const key = els.apiKeyInput.value.trim();
+    const key = sanitizeApiKey(els.apiKeyInput.value);
     if (!key) {
       setSettingsStatus('请先填写 DeepSeek API Key', true);
       return;
@@ -1558,7 +1563,7 @@
   }
 
   function saveSettings() {
-    apiKey = els.apiKeyInput.value.trim();
+    apiKey = sanitizeApiKey(els.apiKeyInput.value);
     const custom = els.customModelInput.value.trim();
     const selected = els.modelSelect.value;
     if (!custom && !selected) {
@@ -1683,6 +1688,12 @@
     bind();
     renderWelcome();
     refreshStatus();
+    const rawKey = localStorage.getItem('ds_api_key') || '';
+    if (rawKey && sanitizeApiKey(rawKey) !== rawKey) {
+      // 旧配置里存了含非法字符的 Key：已自动清洗，提示用户核对
+      localStorage.setItem('ds_api_key', sanitizeApiKey(rawKey));
+      toast('检测到 API Key 含非法字符，已自动清理。若请求仍失败，请重新粘贴 Key', true);
+    }
     if (!apiKey) openSettings();
   });
 
