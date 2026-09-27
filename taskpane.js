@@ -34,7 +34,7 @@
   const MAX_HISTORY_CONV = 20;
   // deepseek-chat / deepseek-reasoner 已于 2026-07-24 弃用
   const LEGACY_MODELS = ['deepseek-chat', 'deepseek-reasoner'];
-  const FALLBACK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'];
+  const FALLBACK_MODELS = ['deepseek-flash', 'deepseek-v4-pro'];
 
   // API Key 只允许可打印 ASCII（sk- 开头的字母数字）；清洗掉复制时混入的
   // 中文、换行、零宽字符等，避免 fetch 请求头报 "non ISO-8859-1 code point"
@@ -1560,7 +1560,7 @@
       setSettingsStatus('模型列表已更新（共 ' + list.length + ' 个），选择后点击“保存设置”');
     } catch (err) {
       populateModelSelect(FALLBACK_MODELS);
-      setSettingsStatus('获取模型失败：' + err.message + '。已显示当前官方模型（deepseek-v4-flash / deepseek-v4-pro），也可在"自定义模型"中手动填写。', true);
+      setSettingsStatus('获取模型失败：' + err.message + '。已显示备用模型（deepseek-flash / deepseek-v4-pro），也可在"自定义模型"中手动填写。', true);
     }
   }
 
@@ -1574,7 +1574,7 @@
     }
     model = custom || selected;
     if (LEGACY_MODELS.includes(model)) {
-      toast('警告：' + model + ' 已弃用（2026-07-24），请选择 deepseek-v4-flash 或 deepseek-v4-pro', true);
+      toast('警告：' + model + ' 已弃用（2026-07-24），请选择 deepseek-flash 或 deepseek-v4-pro', true);
       return;
     }
     reasoningEffort = els.effortSelect.value;

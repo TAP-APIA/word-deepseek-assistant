@@ -6,7 +6,7 @@
 
 - **侧边栏对话**：无需切换窗口，在 Word 内与 DeepSeek 连续对话。
 - **直连 DeepSeek API**：浏览器直接调用 DeepSeek 官方接口，无需本地服务，电脑上无任何常驻进程。
-- **模型实时拉取**：自动从 DeepSeek API 获取当前可用模型（`deepseek-v4-flash` / `deepseek-v4-pro`），不内置过时的模型 ID。
+- **模型实时拉取**：优先从 DeepSeek API 获取可用模型；拉取失败时提供 `deepseek-flash`（V4.1 Flash）和 `deepseek-v4-pro` 作为备用选项，也可填写自定义模型。旧名称 `deepseek-v4-flash` 目前是临时兼容别名。
 - **思考过程展示**：模型的思考过程以可折叠区域实时展示，可随时展开或收起。
 - **思考强度调节**：可在设置中选择低 / 标准 / 最高三档思考强度（对应 DeepSeek 的 `low` / `high` / `max`），默认标准。
 - **流式回复**：回复逐字实时显示，生成过程一目了然。
