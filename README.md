@@ -1,6 +1,6 @@
 # DeepSeek 文档助手
 
-一个运行在 Microsoft 365 **Word 桌面版**侧边栏的 Office 加载项：在编辑文档的同时与 DeepSeek 对话，并把回复直接写入当前文档。
+一个运行在 Microsoft 365 **Word 桌面版**侧边栏的 Office 加载项：在编辑文档的同时与 DeepSeek 对话，并把回复直接写入当前文档。Windows 已使用；Mac 可按下文侧载验证，目前尚未经过 Mac 实机测试。
 
 ## 主要功能
 
@@ -16,11 +16,20 @@
 - **附带文档上下文**：可勾选附带当前选中内容或全文，让模型基于文档实际内容回答，不会凭空编造。
 - **历史对话**：自动保存对话记录，支持在侧边栏展开列表切换、恢复历史对话。
 - **快捷发送**：回车直接发送，Shift+回车换行。
-- **隐私友好**：API Key 仅保存在本机浏览器本地存储中，请求直接发送给 DeepSeek 官方，不经过任何第三方服务器。
+- **隐私友好**：API Key 保存在加载项 WebView 的 `localStorage` 中，请求从加载项页面直接发送给 DeepSeek 官方 API，不经过项目自建中转服务。请勿在共享设备上保存 API Key；本地存储会随 Office 缓存清理而丢失。
 
 ## 使用环境
 
-- Microsoft 365 桌面版 Word（Windows），无需安装 Node.js 或运行任何本地服务。
+- Microsoft 365 桌面版 Word（Windows）；Mac 版提供侧载验证步骤，尚未经过 Mac 实机测试。无需安装 Node.js 或运行任何本地服务。
+
+### 在 Mac 上侧载并验证
+
+1. 下载本仓库的 `manifest.xml`。使用 Microsoft 365 桌面版 Word；不要运行仓库中的 Windows 专用 `.bat` / `.ps1` 安装和刷新脚本。
+2. 在 Finder 中按 `Command` + `Shift` + `G`，前往 `~/Library/Containers/com.microsoft.Word/Data/Documents/wef`；若 `wef` 文件夹不存在，先创建它。将 `manifest.xml` 复制到该文件夹。
+3. 启动 Word（若已打开则先退出并重新打开），打开任意文档，在“开始”>“加载项”中选择“DeepSeek 文档助手”。不同版本的菜单文字可能略有差异。
+4. 在侧边栏设置中填入 DeepSeek API Key，检查模型列表是否加载、对话能否流式返回；在测试文档中分别验证插入、替换选区和撤销。API Key 与对话历史使用该加载项 WebView 的本地存储，Windows 和 Mac 间不会自动同步。
+
+Mac 的侧载路径和步骤参照 [Microsoft 官方文档](https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac)。本项目尚无 Mac 实机测试结果；若出现侧载、网络请求或存储问题，请附上 Word/macOS 版本和具体错误反馈。
 
 ## 获取源码
 
